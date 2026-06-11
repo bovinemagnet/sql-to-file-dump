@@ -14,11 +14,10 @@
 
 ## Requirements
 
-- Java 17+ to run Gradle
-- Gradle wrapper included in this repository
-- Docker only if you want to run the PostgreSQL Testcontainers test locally
-
-The Gradle build requests a Java 25 toolchain and auto-downloads it when needed.
+- **Java 17+** to bootstrap the Gradle build (any locally installed JDK 17 or newer works)
+- **Java 25** for compilation and runtime — the Gradle toolchain support will auto-download it if not already present
+- Gradle wrapper included in this repository (no local Gradle installation needed)
+- Docker only if you want to run the PostgreSQL Testcontainers integration test locally
 
 ## Build and test
 

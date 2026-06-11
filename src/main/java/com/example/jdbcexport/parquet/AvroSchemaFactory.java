@@ -1,0 +1,63 @@
+package com.example.jdbcexport.parquet;
+
+import com.example.jdbcexport.error.ExitCodes;
+import com.example.jdbcexport.error.ExportException;
+import com.example.jdbcexport.jdbc.ResultSetColumn;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
+
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+public final class AvroSchemaFactory {
+
+    public record SchemaDefinition(Schema schema, List<String> fieldNames) {
+    }
+
+    private AvroSchemaFactory() {
+    }
+
+    public static SchemaDefinition buildSchema(List<ResultSetColumn> columns) {
+        var fields = SchemaBuilder.record("ExportRecord")
+            .namespace("com.example.jdbcexport")
+            .fields();
+        List<String> fieldNames = new ArrayList<>(columns.size());
+        Set<String> seen = new HashSet<>();
+
+        for (ResultSetColumn column : columns) {
+            String fieldName = AvroFieldNameSanitizer.sanitize(column.outputName());
+            if (!seen.add(fieldName)) {
+                throw new ExportException(ExitCodes.SCHEMA_ERROR,
+                    "Duplicate Parquet field name detected after Avro sanitization: " + fieldName + ". Use explicit SQL aliases.");
+            }
+            fieldNames.add(fieldName);
+            fields.name(fieldName)
+                .type(nullable(toAvroSchema(column.jdbcType())))
+                .withDefault(null);
+        }
+
+        return new SchemaDefinition(fields.endRecord(), fieldNames);
+    }
+
+    private static Schema nullable(Schema schema) {
+        return Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), schema));
+    }
+
+    private static Schema toAvroSchema(int jdbcType) {
+        return switch (jdbcType) {
+            case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
+            case Types.BIGINT -> Schema.create(Schema.Type.LONG);
+            case Types.FLOAT, Types.REAL -> Schema.create(Schema.Type.FLOAT);
+            case Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
+            case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
+            case Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+            case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.BLOB -> Schema.create(Schema.Type.BYTES);
+            default -> Schema.create(Schema.Type.STRING);
+        };
+    }
+}

@@ -28,6 +28,12 @@ public final class JdbcConnectionFactory {
             } catch (SQLException ignored) {
                 // Some JDBC drivers ignore or reject read-only mode.
             }
+            try {
+                // PostgreSQL only streams with fetch size when autocommit is off.
+                connection.setAutoCommit(false);
+            } catch (SQLException ignored) {
+                // Some JDBC drivers do not support disabling autocommit.
+            }
             return connection;
         } catch (SQLException e) {
             throw new ExportException(ExitCodes.DATABASE_ERROR,

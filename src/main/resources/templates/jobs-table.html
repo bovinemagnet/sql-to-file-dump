@@ -1,0 +1,31 @@
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Submitted</th>
+      <th>Format</th>
+      <th>Output</th>
+      <th>Status</th>
+      <th>Rows</th>
+      <th>Duration (ms)</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {#if jobs.empty}
+    <tr><td colspan="8" class="empty">No jobs yet</td></tr>
+    {/if}
+    {#for job in jobs}
+    <tr>
+      <td>{job.id}</td>
+      <td>{job.submittedAtDisplay}</td>
+      <td>{job.format}</td>
+      <td class="path">{job.output}</td>
+      <td><span class="status status-{job.status}">{job.status}</span></td>
+      <td>{#if job.completed}{job.rowCount}{/if}</td>
+      <td>{job.durationMillis ?: ''}</td>
+      <td><button hx-get="/jobs/{job.id}" hx-target="#detail">Detail</button></td>
+    </tr>
+    {/for}
+  </tbody>
+</table>

@@ -7,6 +7,7 @@ import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.example.jdbcexport.jdbc.ResultSetSchemaReader;
 import com.example.jdbcexport.writer.RowWriter;
 import com.example.jdbcexport.writer.RowWriterFactory;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,6 +21,14 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DuckDbExportIntegrationTest {
+
+    @BeforeAll
+    static void registerDriver() throws Exception {
+        // A @QuarkusTest elsewhere in the suite can trigger DriverManager's one-time
+        // ServiceLoader scan under the Quarkus classloader, leaving the DuckDB driver
+        // invisible to this classloader. Register it explicitly.
+        DriverManager.registerDriver(new org.duckdb.DuckDBDriver());
+    }
 
     @Test
     void exportsToCsv(@TempDir Path tempDir) throws Exception {

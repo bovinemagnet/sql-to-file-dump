@@ -38,10 +38,28 @@ public class ExportJobService {
 
     public ExportJob submit(ExportJobRequest request) {
         String resolvedPassword = validate(request);
-        ExportJob job = new ExportJob(String.valueOf(sequence.incrementAndGet()), Instant.now(), request);
+        ExportJob job = new ExportJob(String.valueOf(sequence.incrementAndGet()), Instant.now(), request, DEFAULT_FETCH_SIZE);
         jobs.put(job.getId(), job);
         executor.submit(() -> run(job, request, resolvedPassword));
         return job;
+    }
+
+    /** Daemon-wide stats for the live dashboard (JVM heap, uptime, queue snapshot). */
+    public DaemonMetrics metrics() {
+        var heap = java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+        long uptime = java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime();
+        long running = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.RUNNING).count();
+        long queued = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.QUEUED).count();
+        long completed = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.COMPLETED).count();
+        long failed = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.FAILED).count();
+        long rowsTotal = jobs.values().stream().mapToLong(ExportJob::getRowCount).sum();
+        return new DaemonMetrics(heap.getUsed(), heap.getMax(), uptime,
+            jobs.size(), running, queued, completed, failed, rowsTotal);
+    }
+
+    public record DaemonMetrics(long heapUsedBytes, long heapMaxBytes, long uptimeMillis,
+                                int jobsTotal, long running, long queued, long completed, long failed,
+                                long rowsTotal) {
     }
 
     public List<ResultSetColumn> describe(ExportJobRequest request) {
@@ -107,17 +125,28 @@ public class ExportJobService {
         job.markRunning(Instant.now());
         try (Connection connection = JdbcConnectionFactory.connect(request.url(), request.user(), resolvedPassword)) {
             List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, request.sql(), DEFAULT_FETCH_SIZE);
+            job.recordSchema(columns.size(), describeServer(connection));
             ExportOptions options = new ExportOptions(
                 request.url(), request.user(), resolvedPassword, request.sql(), null,
                 request.format(), request.output(), DEFAULT_FETCH_SIZE, null, null,
-                request.overwrite(), false, false, false, false, true, "", "SNAPPY");
+                request.overwrite(), false, false, false, false, true, "", request.parquetCompression());
             try (RowWriter writer = new RowWriterFactory().create(options, columns)) {
                 JdbcExporter.ExportResult result =
-                    new JdbcExporter().export(connection, request.sql(), DEFAULT_FETCH_SIZE, null, writer);
+                    new JdbcExporter().export(connection, request.sql(), DEFAULT_FETCH_SIZE, null, writer,
+                        job::recordProgress);
                 job.markCompleted(Instant.now(), result.rowCount());
             }
         } catch (Exception e) {
             job.markFailed(Instant.now(), e.getMessage());
+        }
+    }
+
+    private static String describeServer(Connection connection) {
+        try {
+            var meta = connection.getMetaData();
+            return meta.getDatabaseProductName() + " " + meta.getDatabaseProductVersion();
+        } catch (Exception e) {
+            return null;
         }
     }
 

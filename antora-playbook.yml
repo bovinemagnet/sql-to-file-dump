@@ -1,0 +1,20 @@
+site:
+  title: SQL to File Dump
+  start_page: sql-to-file-dump::index.adoc
+
+content:
+  sources:
+    - url: .
+      branches: HEAD
+      start_path: src/docs
+
+ui:
+  bundle:
+    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
+    snapshot: true
+
+output:
+  dir: ./build/site
+
+runtime:
+  fetch: true

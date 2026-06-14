@@ -1,0 +1,49 @@
+= sql-to-file-dump
+:description: Overview of the sql-to-file-dump JDBC export CLI
+
+`sql-to-file-dump` is a Quarkus 3.36.2 + Picocli command-line tool (command name `jdbc-export`) that connects to any JDBC-compatible database, runs a read-only SQL query, and streams the results to a file in your chosen format.
+It is designed for reliable, memory-efficient bulk data export with no surprises.
+
+== Features
+
+* *Streaming output* — rows are written directly from the JDBC `ResultSet` to disk; the full result set is never buffered in memory
+* *Five output formats* — JSON, NDJSON, CSV, TSV, and Parquet
+* *Read-only safety* — only `SELECT` and `WITH` statements are accepted; `SqlSafetyValidator` rejects anything else, guarding against accidental mutation
+* *Sluice daemon ops console* — a browser-based operations console for submitting and monitoring export jobs; see xref:daemon-dashboard.adoc[Sluice Daemon Dashboard]
+* *Structured exit codes* — exit codes 0–6 and 99 allow reliable scripting and CI integration
+* *Bundled JDBC drivers* — PostgreSQL and Oracle drivers are included; no separate driver installation is required
+
+== Getting started
+
+If you are new to the tool, begin with xref:getting-started.adoc[Getting Started] to build the project and run your first export.
+
+== Documentation
+
+[cols="1,2"]
+|===
+|Page |Description
+
+|xref:getting-started.adoc[Getting Started]
+|Prerequisites, build steps, your first export, and how to start the daemon
+
+|xref:cli-reference.adoc[CLI Reference]
+|Complete option reference, worked examples, and exit codes
+
+|xref:daemon-dashboard.adoc[Sluice Daemon Dashboard]
+|Running the browser-based ops console for submitting and monitoring jobs
+
+|xref:configuration.adoc[Configuration]
+|Application configuration properties and environment variables
+
+|xref:connections.adoc[Database Connections]
+|JDBC URL formats and driver notes for supported databases
+
+|xref:rest-api.adoc[REST API]
+|HTTP endpoints exposed by the daemon for job submission and status
+
+|xref:security.adoc[Security]
+|CSRF protection, bind-host restrictions, and security guidance
+
+|xref:architecture.adoc[Architecture]
+|Internal pipeline design, package structure, and key contracts
+|===

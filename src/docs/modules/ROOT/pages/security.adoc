@@ -1,0 +1,161 @@
+= Security
+:description: Security model, controls, and guidance for jdbc-export.
+
+`jdbc-export` is a local operator tool. Its security model is designed accordingly: access is restricted by network binding rather than authentication, secrets are kept out of persisted state, and the HTTP surface is minimal by default.
+
+This page describes every security control in the tool and its limitations, so you can make an informed decision about how to deploy and use it.
+
+== Security controls summary
+
+[cols="2,3,3",options="header"]
+|===
+| Control
+| Mechanism
+| Scope and limitations
+
+| Network binding
+| Binds to `localhost` by default; `--allow-remote` required for non-loopback
+| Prevents remote access by default; does not protect against local users on the same machine
+
+| CSRF protection
+| `X-Requested-By: jdbc-export` header required on all state-changing requests
+| Blocks drive-by CSRF from cross-origin pages; not a substitute for authentication
+
+| No authentication
+| Intentional design choice for a local tool
+| All local users with network access to the bound address can use the dashboard
+
+| Secret handling
+| Passwords excluded from job records, saved connections, API responses, and dashboard UI
+| Inline passwords passed on the command line may still appear in shell history and process listings
+
+| Output escaping
+| Database-derived values are HTML-escaped before rendering in the dashboard
+| Prevents HTML injection from query results, column names, and error messages
+
+| Read-only SQL guard
+| Only `SELECT` and `WITH` statements are accepted
+| Guards against accidental mutation; not a security boundary against a malicious SQL string
+|===
+
+== No authentication by design
+
+`jdbc-export` does not implement authentication. It is intended to be run by a single operator on a local machine and treats physical or SSH access to that machine as the authentication boundary.
+
+When the `daemon` subcommand is not in use, the tool opens no network listener at all. A normal CLI export run reads from the database, writes to a file, and exits without binding any port.
+
+=== Default bind address
+
+When the daemon is started, it binds to `localhost` (the loopback interface) by default. This means the dashboard is reachable only from the same machine:
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar daemon --port 8080
+----
+
+The dashboard is then available at `http://localhost:8080`. No other host on the network can reach it.
+
+See xref:configuration.adoc[Configuration] for the bind address and connections-file settings.
+
+=== Allowing remote access
+
+Binding to a non-loopback interface requires the explicit `--allow-remote` flag:
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar daemon --port 8080 --host 0.0.0.0 --allow-remote
+----
+
+WARNING: Using `--allow-remote` exposes the dashboard to any host that can reach the bound interface. Because there is no authentication, any user on the network can submit export jobs, view job history, and access saved connection names. Only use `--allow-remote` on a network you fully trust, such as an isolated development environment or a private VPN.
+
+== CSRF protection
+
+All state-changing HTTP requests to the daemon -- `POST`, `PUT`, `PATCH`, and `DELETE` -- must include the header:
+
+[source]
+----
+X-Requested-By: jdbc-export
+----
+
+The HTMX dashboard supplies this header automatically via `hx-headers` on the page body. You do not need to add it manually when using the dashboard.
+
+If you call the REST API directly, you must include the header in every state-changing request:
+
+[source,bash]
+----
+curl -X POST http://localhost:8080/api/jobs \
+  -H "X-Requested-By: jdbc-export" \
+  -H "Content-Type: application/json" \
+  -d '{ ... }'
+----
+
+See xref:rest-api.adoc[REST API] for the full list of endpoints.
+
+=== How this blocks CSRF
+
+A cross-origin web page cannot set an arbitrary request header (such as `X-Requested-By`) without first issuing a CORS preflight `OPTIONS` request. The daemon does not permit cross-origin preflights, so a malicious page loaded in the same browser cannot trigger state-changing requests against the loopback daemon on behalf of a visiting user.
+
+NOTE: The CSRF header is a cross-origin request guard, not an authentication mechanism. It does not prevent a local user -- or any script running with local network access -- from submitting requests. It only blocks drive-by CSRF from cross-origin web pages.
+
+== Secret handling
+
+Passwords used to connect to databases are treated with particular care throughout the tool.
+
+=== Passwords are never persisted
+
+When you submit an export job via the dashboard or the REST API, the password is used to open the JDBC connection and is then discarded. It is never stored in the in-memory job record. If you inspect a job's details via the API or dashboard after submission, the password field will be absent from the response.
+
+Saved connections (stored on disk) record only the name of the environment variable that holds the password, not the password value itself. See xref:connections.adoc[Connections] for details on the saved connections file format.
+
+=== Prefer environment variable references
+
+TIP: Use `--password-env` on the command line, or `passwordEnv` in the REST API body, to supply the name of an environment variable that contains the password. This avoids the password appearing in shell history, process listings (`ps aux`), and application logs.
+
+Command-line example using an environment variable reference:
+
+[source,bash]
+----
+export DB_PASSWORD=s3cr3t
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/mydb \
+  --user myuser \
+  --password-env DB_PASSWORD \
+  --sql "SELECT * FROM orders" \
+  --output orders.json
+----
+
+REST API example using an environment variable reference:
+
+[source,json]
+----
+{
+  "url": "jdbc:postgresql://localhost:5432/mydb",
+  "user": "myuser",
+  "passwordEnv": "DB_PASSWORD",
+  "sql": "SELECT * FROM orders",
+  "format": "json",
+  "output": "/tmp/orders.json"
+}
+----
+
+Inline passwords (via `--password` or `"password": "..."`) are supported for convenience but carry the risk of exposure through shell history and process inspection.
+
+== Output escaping
+
+The HTMX dashboard displays information derived from the database and from user-supplied inputs: output file paths, column names, error messages, and server-version strings. All such values are HTML-escaped before being rendered in the dashboard.
+
+This prevents a database from injecting HTML or script content into the dashboard through query results or metadata -- for example, a table column named `<script>alert(1)</script>` would be rendered as literal text rather than executed.
+
+== Read-only SQL guard
+
+`jdbc-export` only accepts SQL statements that begin with `SELECT` or `WITH`. Any other statement -- `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CALL`, and so on -- is rejected before a database connection is opened.
+
+NOTE: The read-only guard protects against accidental mutations, not against a deliberately crafted SQL string. If the SQL you supply can be influenced by untrusted input, you must validate and sanitise it before passing it to `jdbc-export`. Only run SQL that you trust.
+
+The guard uses the JDBC connection in read-only mode. Combined with the statement check, this provides a defence-in-depth layer against unintended writes.
+
+== Job history and persistence
+
+Job history -- the list of submitted export jobs, their status, and their results -- is held in memory only. It is lost when the daemon process exits. No job data is written to disk.
+
+Saved connections (connection names, JDBC URLs, usernames, and environment variable references for passwords) are persisted to a file on disk. See xref:connections.adoc[Connections] for the file location and format, and xref:configuration.adoc[Configuration] for the setting that controls the file path.

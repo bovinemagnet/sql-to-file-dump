@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static io.restassured.RestAssured.get;
 import static io.restassured.RestAssured.given;
@@ -17,30 +19,29 @@ import static org.hamcrest.Matchers.not;
 class DashboardResourceTest {
 
     @Test
-    void indexPageLoadsWithFormAndHtmx() {
+    void indexServesSluiceShell() {
         get("/")
             .then()
             .statusCode(200)
-            .body(containsString("jdbc-export"))
-            .body(containsString("hx-post=\"/jobs\""))
-            .body(containsString("htmx.min.js"));
+            .body(containsString("Sluice"))
+            .body(containsString("/sluice/app.js"));
     }
 
     @Test
-    void stateChangingRequestWithoutCsrfHeaderIsRejected(@TempDir Path tempDir) {
+    void stateChangingApiRequestWithoutCsrfHeaderIsRejected(@TempDir Path tempDir) {
         given()
             .formParam("url", "jdbc:duckdb:")
             .formParam("user", "ignored")
             .formParam("sql", "SELECT 1 AS a")
             .formParam("format", "csv")
             .formParam("output", tempDir.resolve("blocked.csv").toString())
-            .when().post("/jobs")
+            .when().post("/api/jobs")
             .then()
             .statusCode(403);
     }
 
     @Test
-    void submittedJobAppearsInJobsTableAndCompletes(@TempDir Path tempDir) throws Exception {
+    void submittedJobRunsToCompletionAndNeverLeaksPassword(@TempDir Path tempDir) throws Exception {
         Path output = tempDir.resolve("dashboard-out.csv");
 
         given()
@@ -51,18 +52,18 @@ class DashboardResourceTest {
             .formParam("sql", "SELECT 7 AS lucky")
             .formParam("format", "csv")
             .formParam("output", output.toString())
-            .when().post("/jobs")
+            .when().post("/api/jobs")
             .then()
             .statusCode(200)
-            .body(containsString("submitted"))
+            .body(containsString("\"id\""))
             .body(not(containsString("super-secret-value")));
 
-        awaitCompletedRow();
+        awaitCompletedJob();
         assertThat(Files.readAllLines(output)).containsExactly("lucky", "7");
     }
 
     @Test
-    void invalidSqlShowsInlineError(@TempDir Path tempDir) {
+    void invalidSqlReturnsBadRequest(@TempDir Path tempDir) {
         given()
             .header("X-Requested-By", "jdbc-export")
             .formParam("url", "jdbc:duckdb:")
@@ -70,30 +71,28 @@ class DashboardResourceTest {
             .formParam("sql", "DROP TABLE bookings")
             .formParam("format", "csv")
             .formParam("output", tempDir.resolve("never.csv").toString())
-            .when().post("/jobs")
+            .when().post("/api/jobs")
             .then()
-            .statusCode(200)
-            .body(containsString("class=\"feedback error\""))
+            .statusCode(400)
             .body(containsString("SELECT"));
     }
 
     @Test
-    void describeRendersColumnsFragment() {
+    void describeReturnsColumnsAsJson() {
         given()
             .header("X-Requested-By", "jdbc-export")
             .formParam("url", "jdbc:duckdb:")
             .formParam("user", "ignored")
             .formParam("sql", "SELECT 1 AS first_col, 'x' AS second_col")
-            .when().post("/describe")
+            .when().post("/api/describe")
             .then()
             .statusCode(200)
             .body(containsString("first_col"))
-            .body(containsString("second_col"))
-            .body(containsString("Schema"));
+            .body(containsString("second_col"));
     }
 
     @Test
-    void jobDetailShowsSqlAndNeverThePassword(@TempDir Path tempDir) {
+    void jobDetailExposesSqlAndMetricsButNeverThePassword(@TempDir Path tempDir) {
         given()
             .header("X-Requested-By", "jdbc-export")
             .formParam("url", "jdbc:duckdb:")
@@ -102,38 +101,49 @@ class DashboardResourceTest {
             .formParam("sql", "SELECT 42 AS answer")
             .formParam("format", "json")
             .formParam("output", tempDir.resolve("detail.json").toString())
-            .when().post("/jobs");
+            .when().post("/api/jobs");
 
-        // Jobs render newest-first, so the first detail link is the job submitted above.
-        String jobsHtml = get("/jobs").then().statusCode(200).extract().asString();
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("hx-get=\"/jobs/(\\d+)\"").matcher(jobsHtml);
+        // Jobs render newest-first, so the first id in the list is the job submitted above.
+        String jobsJson = get("/api/jobs").then().statusCode(200).extract().asString();
+        Matcher matcher = Pattern.compile("\"id\":\"(\\d+)\"").matcher(jobsJson);
         assertThat(matcher.find()).isTrue();
         String id = matcher.group(1);
 
-        get("/jobs/" + id)
+        get("/api/jobs/" + id)
             .then()
             .statusCode(200)
             .body(containsString("SELECT 42 AS answer"))
+            .body(containsString("\"fetchSize\""))
             .body(not(containsString("super-secret-value")));
     }
 
     @Test
-    void unknownJobShowsError() {
-        get("/jobs/999999")
+    void unknownJobReturnsNotFound() {
+        get("/api/jobs/999999")
             .then()
-            .statusCode(200)
+            .statusCode(404)
             .body(containsString("Job not found"));
     }
 
-    private void awaitCompletedRow() throws InterruptedException {
+    @Test
+    void metricsReportsHeapAndCounts() {
+        get("/api/metrics")
+            .then()
+            .statusCode(200)
+            .body(containsString("heapUsedBytes"))
+            .body(containsString("heapMaxBytes"))
+            .body(containsString("uptimeMillis"));
+    }
+
+    private void awaitCompletedJob() throws InterruptedException {
         long deadline = System.currentTimeMillis() + 30_000;
         while (System.currentTimeMillis() < deadline) {
-            String html = get("/jobs").then().statusCode(200).extract().asString();
-            if (html.contains("status-COMPLETED")) {
+            String json = get("/api/jobs").then().statusCode(200).extract().asString();
+            if (json.contains("\"status\":\"completed\"")) {
                 return;
             }
-            if (html.contains("status-FAILED")) {
-                throw new AssertionError("Job failed:\n" + html);
+            if (json.contains("\"status\":\"failed\"")) {
+                throw new AssertionError("Job failed:\n" + json);
             }
             Thread.sleep(100);
         }

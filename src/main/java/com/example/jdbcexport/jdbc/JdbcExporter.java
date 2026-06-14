@@ -11,10 +11,27 @@ import java.sql.SQLException;
 
 public final class JdbcExporter {
 
+    /** Notifies how many rows have been written so far, so callers can surface live progress. */
+    @FunctionalInterface
+    public interface ProgressListener {
+        void onProgress(long rowCount);
+
+        ProgressListener NONE = rowCount -> {
+        };
+    }
+
+    /** Report progress at most this often, to keep the hot row loop cheap. */
+    private static final int PROGRESS_INTERVAL = 256;
+
     public record ExportResult(long rowCount, long durationMillis) {
     }
 
     public ExportResult export(Connection connection, String sql, int fetchSize, Long maxRows, RowWriter writer) {
+        return export(connection, sql, fetchSize, maxRows, writer, ProgressListener.NONE);
+    }
+
+    public ExportResult export(Connection connection, String sql, int fetchSize, Long maxRows, RowWriter writer,
+                               ProgressListener progress) {
         long startMs = System.currentTimeMillis();
         long rowCount = 0;
 
@@ -30,8 +47,12 @@ public final class JdbcExporter {
                     }
                     writer.writeRow(rs);
                     rowCount++;
+                    if (rowCount % PROGRESS_INTERVAL == 0) {
+                        progress.onProgress(rowCount);
+                    }
                 }
                 writer.finish();
+                progress.onProgress(rowCount);
             }
         } catch (ExportException e) {
             throw e;

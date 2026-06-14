@@ -1,0 +1,266 @@
+= CLI Reference
+:description: Complete option reference, worked examples, and exit codes for jdbc-export
+
+== Synopsis
+
+[source]
+----
+jdbc-export --url <jdbc-url> --user <username> (--sql <query> | --sql-file <file>) [options]
+jdbc-export daemon [--port 8080] [--host localhost] [--allow-remote]
+----
+
+== Options
+
+[cols="2,2,1,3"]
+|===
+|Option |Type / Values |Default |Description
+
+|`--url <jdbc-url>`
+|String
+|—
+|JDBC URL.
+Required for export operations.
+
+|`--user <username>`
+|String
+|—
+|Database username.
+Required for export operations.
+
+|`--password <value>`
+|String
+|—
+|Inline password.
+Discouraged — prefer `--password-env` to avoid the password appearing in shell history.
+
+|`--password-env <ENV_NAME>`
+|String
+|—
+|Read the password from the named environment variable.
+Preferred over `--password`.
+
+|`--sql <query>`
+|String
+|—
+|Inline SQL query.
+Mutually exclusive with `--sql-file`.
+
+|`--sql-file <file>`
+|Path
+|—
+|Path to a file containing the SQL query.
+Mutually exclusive with `--sql`.
+
+|`--format <format>`
+|`json` \| `ndjson` \| `csv` \| `tsv` \| `parquet`
+|—
+|Output format.
+
+|`--output <path>`
+|Path
+|—
+|Destination file path.
+
+|`--fetch-size <n>`
+|Integer
+|`1000`
+|JDBC fetch size.
+Controls how many rows are retrieved from the server per network round trip.
+
+|`--max-rows <n>`
+|Integer
+|—
+|Optional row limit.
+Export stops after this many rows.
+
+|`--metadata <path>`
+|Path
+|—
+|Write a metadata sidecar JSON file alongside the output.
+
+|`--overwrite`
+|Flag
+|`false`
+|Replace an existing output file without error.
+
+|`--dry-run`
+|Flag
+|`false`
+|Validate options without connecting to the database or writing output.
+
+|`--describe`
+|Flag
+|`false`
+|Print column names and JDBC types instead of exporting data.
+
+|`--pretty`
+|Flag
+|`false`
+|Pretty-print JSON array output.
+Applies only to the `json` format.
+
+|`--[no-]include-header`
+|Flag
+|`true`
+|Include a header row.
+Applies to `csv` and `tsv` formats.
+
+|`--null-value <value>`
+|String
+|(empty string)
+|Replacement text for SQL `NULL` values.
+Applies to `csv` and `tsv` formats.
+
+|`--parquet-compression <codec>`
+|`SNAPPY` \| `GZIP` \| `ZSTD` \| `UNCOMPRESSED`
+|`SNAPPY`
+|Parquet compression codec.
+
+|`--verbose`
+|Flag
+|`false`
+|Print extra progress output during export.
+|===
+
+== Choosing a format
+
+[cols="1,3"]
+|===
+|Format |Use when
+
+|`json`
+|You need one human-readable file containing an array of objects.
+
+|`ndjson`
+|You need stream-friendly, line-delimited JSON (one object per line); suitable for log pipelines and large files.
+
+|`csv`
+|You need spreadsheet-friendly tabular data with comma delimiters.
+
+|`tsv`
+|You need spreadsheet-friendly tabular data where commas are common in values.
+
+|`parquet`
+|You need compact, analytics-friendly columnar data for tools such as DuckDB, Spark, or BigQuery.
+|===
+
+== Worked examples
+
+=== 1. Export to CSV
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/sales \
+  --user analyst \
+  --password-env DB_PASS \
+  --sql "SELECT order_id, customer_name, total FROM orders" \
+  --format csv \
+  --output orders.csv
+----
+
+=== 2. Export to NDJSON from a SQL file
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/sales \
+  --user analyst \
+  --password-env DB_PASS \
+  --sql-file queries/orders.sql \
+  --format ndjson \
+  --output orders.ndjson
+----
+
+=== 3. Describe the schema
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/sales \
+  --user analyst \
+  --password-env DB_PASS \
+  --sql "SELECT * FROM orders LIMIT 0" \
+  --describe
+----
+
+=== 4. Parquet export with metadata sidecar and ZSTD compression
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/warehouse \
+  --user etl \
+  --password-env DB_PASS \
+  --sql-file queries/daily_summary.sql \
+  --format parquet \
+  --parquet-compression ZSTD \
+  --output daily_summary.parquet \
+  --metadata daily_summary_meta.json
+----
+
+== Why column aliases matter
+
+Column names in your SQL query become JSON field names, CSV headers, and Parquet field names.
+Choosing stable, unambiguous aliases avoids errors and produces cleaner output files.
+
+*Good* — stable, unambiguous labels:
+
+[source,sql]
+----
+SELECT o.id AS order_id, c.name AS customer_name
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+----
+
+*Avoid* — duplicate column names after sanitisation:
+
+[source,sql]
+----
+SELECT o.id, c.id
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+----
+
+WARNING: For Parquet output, column names are sanitised to valid Avro identifiers.
+If two columns produce the same sanitised name (as in the example above), the tool fails immediately with a descriptive error.
+Always alias ambiguous columns in your SQL to ensure unique output names.
+
+== Read-only safety
+
+NOTE: Only `SELECT` and `WITH` statements are accepted.
+`SqlSafetyValidator` rejects all other statement types, protecting against accidental data mutation.
+Only execute SQL you trust.
+
+== Exit codes
+
+[cols="1,3"]
+|===
+|Code |Meaning
+
+|`0`
+|Success
+
+|`1`
+|Invalid CLI arguments
+
+|`2`
+|SQL input error
+
+|`3`
+|Database connection or query error
+
+|`4`
+|Output write error
+
+|`5`
+|Schema or column mapping error
+
+|`6`
+|Unsupported format or unsupported type
+
+|`99`
+|Unexpected error
+|===
+
+For details on the internal pipeline that processes each export, see xref:architecture.adoc[Architecture].

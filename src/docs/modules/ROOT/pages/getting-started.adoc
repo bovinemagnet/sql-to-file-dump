@@ -1,0 +1,136 @@
+= Getting Started
+:description: Prerequisites, build instructions, and your first export with sql-to-file-dump
+
+This guide walks you through building `sql-to-file-dump`, running the tests, and performing your first export.
+
+== Prerequisites
+
+[cols="1,3"]
+|===
+|Requirement |Notes
+
+|Java 17+
+|Required to bootstrap the Gradle build.
+Java 25 is used for compile and runtime and is *auto-downloaded* by the Gradle toolchain — no manual installation is needed.
+
+|Gradle wrapper
+|Included in the repository.
+Use `./gradlew` to invoke all build tasks.
+
+|Docker
+|Optional.
+Only required if you want to run `PostgresExportIntegrationTest`, which uses Testcontainers.
+
+|Node.js and npx
+|Optional.
+Only required if you are building the documentation with `./gradlew antora`.
+|===
+
+== Build
+
+Run the following command to compile the project and produce the Quarkus runner jar:
+
+[source,bash]
+----
+./gradlew build
+----
+
+The runner jar is produced at `build/quarkus-app/quarkus-run.jar`.
+
+== Running tests
+
+[source,bash]
+----
+./gradlew test
+----
+
+NOTE: `PostgresExportIntegrationTest` uses Testcontainers and requires Docker to be running.
+`DuckDbExportIntegrationTest` runs in-process with no external dependencies and is the preferred integration target for new test coverage unless the behaviour is PostgreSQL-specific.
+
+== Your first export
+
+The following example exports a CSV file from a PostgreSQL database.
+Replace the JDBC URL, username, and SQL query with values for your environment.
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/mydb \
+  --user myuser \
+  --password-env DB_PASS \
+  --sql "SELECT id, name FROM customers" \
+  --format csv \
+  --output customers.csv
+----
+
+== Passing the password via an environment variable
+
+Set the environment variable before invoking the tool:
+
+[source,bash]
+----
+export DB_PASS=secret
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/mydb \
+  --user myuser \
+  --password-env DB_PASS \
+  --sql "SELECT id, name FROM customers" \
+  --format csv \
+  --output customers.csv
+----
+
+NOTE: `--password-env` is preferred over `--password`.
+Using `--password` places the plain-text password in your shell history and in process listings visible to other users on the same machine.
+
+== Describing the schema
+
+Use `--describe` to print column names and JDBC types without exporting any data.
+This is useful for verifying your SQL before a full export.
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/mydb \
+  --user myuser \
+  --password-env DB_PASS \
+  --sql "SELECT * FROM my_table" \
+  --describe
+----
+
+== Dry run
+
+Use `--dry-run` to validate your options without opening a database connection or writing any output.
+This is useful in CI pipelines to verify that arguments are well-formed before scheduling a full export.
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/mydb \
+  --user myuser \
+  --password-env DB_PASS \
+  --sql "SELECT id, name FROM customers" \
+  --format csv \
+  --output customers.csv \
+  --dry-run
+----
+
+== Starting the Sluice daemon
+
+=== Development mode (with hot reload)
+
+[source,bash]
+----
+./gradlew quarkusDev
+----
+
+When started with no arguments, the application boots the Sluice dashboard automatically.
+The Quarkus Dev UI is available at `http://localhost:8080/q/dev-ui`.
+
+=== Production mode
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar daemon --port 8080 --host localhost
+----
+
+See xref:daemon-dashboard.adoc[Sluice Daemon Dashboard] for full daemon documentation, including job submission, status monitoring, and security considerations.

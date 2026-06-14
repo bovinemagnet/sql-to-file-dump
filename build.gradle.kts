@@ -30,11 +30,14 @@ dependencies {
     implementation("io.quarkus:quarkus-picocli")
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-rest-qute")
+    implementation("io.quarkus:quarkus-rest-jackson")
     implementation("org.webjars.npm:htmx.org:2.0.4")
 
     implementation("com.fasterxml.jackson.core:jackson-core")
     implementation("com.fasterxml.jackson.core:jackson-databind")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
+
+    implementation("com.cronutils:cron-utils:9.2.1")
 
     implementation("org.apache.commons:commons-csv:$commonsCsvVersion")
 
@@ -57,4 +60,11 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     // Required by Quarkus @QuarkusMainTest launcher on Java 24+.
     jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
+}
+
+// Build the Antora documentation site from src/docs via the Antora CLI (Node/npx).
+tasks.register<Exec>("antora") {
+    group = "documentation"
+    description = "Build the Antora documentation site into build/site"
+    commandLine("npx", "--yes", "antora", "antora-playbook.yml")
 }

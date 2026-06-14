@@ -11,6 +11,12 @@
 - Optional metadata sidecar JSON
 - Schema inspection with `--describe`
 - DuckDB and PostgreSQL integration coverage in tests
+- `daemon` mode serving **Sluice**, a browser ops console for submitting and
+  monitoring exports, backed by a JSON API at `/api`
+- Live run metrics (rows streamed, throughput, output size, JVM heap, fetch-batch
+  progress) captured from the real export pipeline
+- A persisted, operator-managed registry of saved JDBC connections (passwords kept
+  as environment-variable references only — never written to disk)
 
 ## Requirements
 
@@ -44,7 +50,7 @@ java -jar build/quarkus-app/quarkus-run.jar --help
 
 ```text
 jdbc-export --url <jdbc-url> --user <username> (--sql <query> | --sql-file <file>) [options]
-jdbc-export daemon [--port 8080] [--host localhost]
+jdbc-export daemon [--port 8080] [--host localhost] [--allow-remote]
 ```
 
 ### Common options
@@ -99,45 +105,117 @@ java -jar build/quarkus-app/quarkus-run.jar   --url jdbc:postgresql://localhost:
 - Parquet uses an Avro-backed schema and sanitizes field names to valid Avro identifiers.
 - Duplicate normalized output column names fail fast and should be fixed with explicit SQL aliases.
 
-## Daemon mode and dashboard
+## Daemon mode and the Sluice ops console
 
 ```bash
 java -jar build/quarkus-app/quarkus-run.jar daemon --port 8080
 ```
 
-Daemon mode keeps the process running and serves a browser dashboard (HTMX, no custom
-JavaScript) for submitting and monitoring export jobs:
+Daemon mode keeps the process running and serves **Sluice**, a browser ops console, at
+`http://localhost:8080/`. Sluice is a single-page app with a side-rail of four views:
 
-- Submit exports with the same options as the CLI (URL, user, password or password
-  environment variable, SQL, format, output path, overwrite).
-- Watch job status (`QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`) with live updates,
-  row counts, and durations.
-- Inspect a job's SQL and error details.
-- Preview a query's column schema without exporting (`Describe schema`).
+- **Dashboard** — submit exports (with the same inputs as the CLI, or by picking a
+  saved connection), watch a KPI strip (uptime, jobs, rows exported, active runs,
+  success rate), and browse a filterable job queue and history with status and format
+  badges. `Describe schema` previews a query's columns without exporting.
+- **Live Run** — a metrics cockpit for the running job: rows streamed, throughput
+  (rows/second) chart, elapsed time and output size, JDBC fetch-batch progress, a JVM
+  heap gauge, connection and query state, a live log, and the running SQL.
+- **Schedules** — create, edit, run, and enable/disable recurring or one-off exports
+  (cron, fixed interval, or run-once). Schedules persist to `~/.sluice/schedule.json`
+  and are fired by a built-in scheduler while the daemon runs. See "Schedules" below.
+- **Connections** — manage saved JDBC connections (add, edit, delete, and test). See
+  "Saved connections" below.
 
-During development, run the dashboard with hot reload — with no arguments, dev mode
+The console has a dark/light theme toggle, and the selected view and theme persist
+across reloads. Everything it shows is served by a JSON API under `/api` (jobs, job
+detail, submit, describe, daemon metrics, and connection CRUD/test).
+
+During development, run the console with hot reload — with no arguments, dev mode
 starts the daemon automatically:
 
 ```bash
 ./gradlew quarkusDev
 ```
 
-The dashboard is then served at `http://localhost:8080/` (Quarkus Dev UI at
+The console is then served at `http://localhost:8080/` (Quarkus Dev UI at
 `http://localhost:8080/q/dev-ui`), and edits to templates, static assets, and Java
 code reload live.
 
 Notes:
 
-- The dashboard has **no authentication** and binds to `localhost` by default. Binding
-  to a non-loopback host requires `--allow-remote`, and should only be done on trusted
+- The console has **no authentication** and binds to `localhost` by default. Binding to
+  a non-loopback host requires `--allow-remote`, and should only be done on trusted
   networks.
 - State-changing requests require an `X-Requested-By: jdbc-export` header, which the
-  dashboard's HTMX sends automatically. This blocks cross-site request forgery from
-  other pages in your browser; it is not a substitute for authentication.
+  console sends automatically. This blocks cross-site request forgery from other pages
+  in your browser; it is not a substitute for authentication.
 - Job history is in memory only and is lost when the daemon stops.
-- Passwords submitted through the form are used for the connection only; they are
-  never stored on the job or rendered back.
+- Passwords submitted through the form are used for the connection only; they are never
+  stored on the job or rendered back.
 - Normal (non-daemon) CLI runs do not open any network listener.
+
+### Saved connections
+
+The daemon keeps an operator-managed registry of reusable JDBC connections, persisted
+as a JSON array (default `~/.sluice/connections.json`, configurable with
+`sluice.connections.file`). A saved connection stores only the **name** of an
+environment variable for its password (`passwordEnv`) — never a password value. The
+password is resolved from that variable at run time, exactly as the CLI's
+`--password-env` works. The Dashboard's connection picker fills the export form from a
+saved connection, and the Connections view can test reachability on demand.
+
+### Schedules
+
+Recurring and one-off exports are persisted to `~/.sluice/schedule.json` (configurable
+with `sluice.schedule.file`) and fired by a scheduler that runs inside the daemon. Each
+schedule references a saved connection by id (so no credentials live in the file), and
+carries the SQL, format, an output path pattern, and a trigger:
+
+- **cron** — a 5-field UNIX expression in the daemon's time zone (e.g. `0 2 * * *`)
+- **interval** — every N minutes, hours, or days
+- **once** — a single run at `yyyy-MM-dd HH:mm`
+
+Output patterns expand `{date}`, `{time}`, `{datetime}`, and `{ts}`/`{timestamp}` at
+fire time (e.g. `exports/orders_{date}.parquet`). Manage schedules from the Schedules
+tab (create/edit/delete/enable/run-now) or the `/api/schedules` API. Because the
+scheduler lives in the daemon, the daemon must be running for schedules to fire; for
+fully unattended scheduling without a long-running daemon, drive the CLI from cron or a
+systemd timer instead (see `examples/scheduled-export.sh`).
+
+### Configuration
+
+| Setting | Default | Purpose |
+| ------- | ------- | ------- |
+| `quarkus.http.port` (or `daemon --port`) | `8080` | Console HTTP port |
+| `quarkus.http.host` (or `daemon --host`) | `localhost` | Bind address |
+| `daemon --allow-remote` | off | Permit binding a non-loopback host (no auth — trusted networks only) |
+| `sluice.connections.file` | `~/.sluice/connections.json` | Saved-connections store path |
+| `sluice.schedule.file` | `~/.sluice/schedule.json` | Schedules store path |
+| `quarkus.log.level` | `INFO` | Log level |
+
+Configuration can be supplied in `src/main/resources/application.properties`, as JVM
+system properties (`-Dsluice.connections.file=...`), or via environment variables;
+system properties and environment variables override `application.properties`. Password
+environment variables (referenced by `--password-env` or a connection's `passwordEnv`)
+must be present in the daemon's environment, for example:
+
+```bash
+export DB_PASSWORD='secret'
+java -jar build/quarkus-app/quarkus-run.jar daemon --port 9090 --host 0.0.0.0 --allow-remote
+```
+
+## Documentation
+
+Full documentation is maintained as an Antora site under `src/docs`. Build it with:
+
+```bash
+./gradlew antora
+```
+
+The generated site is written to `build/site` (open `build/site/index.html`). It covers
+the CLI reference, the daemon and Sluice console, configuration, saved connections, the
+REST API, security, and the architecture.
 
 ## Choosing a format
 

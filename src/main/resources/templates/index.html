@@ -1,71 +1,25 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jdbc-export dashboard</title>
+<title>Sluice — JDBC Export Daemon</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/style.css">
-<script src="/webjars/htmx.org/2.0.4/dist/htmx.min.js"></script>
+<link rel="stylesheet" href="/sluice/rf.css">
+<link rel="stylesheet" href="/sluice/rf-desktop.css">
+<link rel="stylesheet" href="/sluice/ops.css">
 </head>
-<body hx-headers='{"X-Requested-By": "jdbc-export"}'>
-<header>
-  <h1>jdbc-export</h1>
-  <p class="subtitle">Export SQL query results to JSON, NDJSON, CSV, TSV, or Parquet</p>
-</header>
+<body>
+  <div id="app"></div>
 
-<main>
-  <section class="card">
-    <h2>New export</h2>
-    <form hx-post="/jobs" hx-target="#feedback">
-      <div class="grid">
-        <label>JDBC URL
-          <input name="url" required placeholder="jdbc:postgresql://localhost:5432/appdb">
-        </label>
-        <label>User
-          <input name="user" required>
-        </label>
-        <label>Password
-          <input name="password" type="password" autocomplete="off">
-        </label>
-        <label>Password environment variable
-          <input name="passwordEnv" placeholder="DB_PASSWORD">
-        </label>
-      </div>
-      <label>SQL (SELECT / WITH only)
-        <textarea name="sql" rows="5" required placeholder="select b.booking_id as booking_id, b.attendees as attendees from bookings b"></textarea>
-      </label>
-      <div class="grid">
-        <label>Format
-          <select name="format">
-            <option value="csv">csv</option>
-            <option value="tsv">tsv</option>
-            <option value="json">json</option>
-            <option value="ndjson">ndjson</option>
-            <option value="parquet">parquet</option>
-          </select>
-        </label>
-        <label>Output path
-          <input name="output" required placeholder="exports/bookings.csv">
-        </label>
-      </div>
-      <label class="checkbox">
-        <input type="checkbox" name="overwrite" value="true"> Overwrite existing file
-      </label>
-      <div class="actions">
-        <button type="submit">Run export</button>
-        <button type="button" class="secondary" hx-post="/describe" hx-target="#detail" hx-include="closest form">Describe schema</button>
-      </div>
-    </form>
-    <div id="feedback"></div>
-  </section>
-
-  <section class="card">
-    <h2>Jobs</h2>
-    <div id="jobs" hx-get="/jobs" hx-trigger="load, every 2s"></div>
-  </section>
-
-  <section id="detail"></section>
-</main>
+  <script src="/sluice/charts.js"></script>
+  <script src="/sluice/data.js"></script>
+  <script src="/sluice/components.js"></script>
+  <script src="/sluice/api.js"></script>
+  <script src="/sluice/views-dashboard.js"></script>
+  <script src="/sluice/views-liverun.js"></script>
+  <script src="/sluice/views-schedules.js"></script>
+  <script src="/sluice/views-connections.js"></script>
+  <script src="/sluice/app.js"></script>
 </body>
 </html>

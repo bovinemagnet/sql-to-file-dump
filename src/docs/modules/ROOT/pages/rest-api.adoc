@@ -1,0 +1,485 @@
+= REST API Reference
+
+The daemon mode exposes a JSON API that backs the Sluice console dashboard.
+You can call these endpoints directly with any HTTP client.
+See xref:daemon-dashboard.adoc[Daemon Dashboard] for the browser interface.
+
+== CSRF Protection
+
+All state-changing requests (POST, PUT, PATCH, DELETE) require the header `X-Requested-By: jdbc-export`.
+
+[NOTE]
+====
+The dashboard sends this header automatically via `hx-headers` on the `<body>` element.
+You only need to add it manually when calling the API directly.
+====
+
+[WARNING]
+====
+Requests without this header will be rejected with a 403 Forbidden response.
+====
+
+== Jobs
+
+=== Job Object
+
+Every job submitted to the daemon is represented as a JSON object with the following fields.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|id |String |Unique job identifier
+|submittedAt |String |Time the job was submitted (HH:mm:ss format)
+|url |String |JDBC connection URL
+|user |String |Database username
+|driver |String |JDBC driver class name
+|sql |String |SQL query that was executed
+|format |String |Output format (json, ndjson, csv, tsv, parquet)
+|output |String |Output file path
+|status |String |One of: queued, running, completed, failed
+|rowCount |Number |Number of rows written so far
+|durationMillis |Number |Total duration in milliseconds (null until the job finishes)
+|elapsedMillis |Number |Elapsed time in milliseconds
+|throughput |Number |Rows per second
+|outputBytes |Number |Bytes written to the output file
+|fetchSize |Number |JDBC fetch size used
+|columnCount |Number |Number of columns in the result set
+|serverInfo |String |Database server version string
+|compression |String |Compression applied to the output (if any)
+|error |String |Error message (null unless status is failed)
+|===
+
+[NOTE]
+====
+The password is never present in any job response.
+====
+
+=== List All Jobs
+
+`GET /api/jobs`
+
+Returns a JSON array of all job objects.
+
+[source,json]
+----
+[
+  {
+    "id": "a1b2c3",
+    "status": "completed",
+    "rowCount": 1024,
+    ...
+  }
+]
+----
+
+=== Get a Job
+
+`GET /api/jobs/\{id}`
+
+Returns a single job object, or 404 with `{"error": "..."}` if not found.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|error |String |Human-readable error message
+|===
+
+=== Submit a Job
+
+`POST /api/jobs`
+
+Content type: `application/x-www-form-urlencoded`. Requires the CSRF header.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Required |Description
+
+|url |Yes |JDBC connection URL
+|user |Yes |Database username
+|password |No |Password (plain text; prefer passwordEnv)
+|passwordEnv |No |Environment variable name containing the password
+|sql |Yes |SQL query to execute (SELECT or WITH only)
+|format |Yes |Output format: json, ndjson, csv, tsv, parquet
+|output |Yes |Absolute path for the output file
+|compression |No |Compression to apply (e.g. gzip)
+|connectionId |No |ID of a saved connection to use as defaults
+|overwrite |No |Set to true to overwrite an existing output file
+|===
+
+Success response (200):
+
+[source,json]
+----
+{"id":"a1b2c3","output":"/tmp/orders.csv"}
+----
+
+Error response (400):
+
+[source,json]
+----
+{"error":"SQL validation failed: only SELECT or WITH queries are permitted"}
+----
+
+[TIP]
+====
+Use `passwordEnv` rather than `password` to avoid credentials appearing in process arguments or server logs.
+====
+
+=== Describe Query Columns
+
+`POST /api/describe`
+
+Content type: `application/x-www-form-urlencoded`. Requires the CSRF header.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Required |Description
+
+|url |Yes |JDBC connection URL
+|user |Yes |Database username
+|password |No |Password (plain text)
+|passwordEnv |No |Environment variable name containing the password
+|sql |Yes |SQL query to describe
+|===
+
+Success response (200) — JSON array of column descriptors:
+
+[source,json]
+----
+[
+  {
+    "index": 1,
+    "label": "order_id",
+    "outputName": "order_id",
+    "jdbcTypeName": "INTEGER",
+    "nullable": false
+  }
+]
+----
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|index |Number |1-based column index
+|label |String |Column label from the result set metadata
+|outputName |String |Sanitised name used in the output file
+|jdbcTypeName |String |JDBC type name (e.g. VARCHAR, INTEGER)
+|nullable |Boolean |Whether the column allows null values
+|===
+
+=== Metrics
+
+`GET /api/metrics`
+
+Returns server and job statistics. No CSRF header required (read-only).
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|heapUsedBytes |Number |JVM heap currently in use (bytes)
+|heapMaxBytes |Number |Maximum JVM heap size (bytes)
+|uptimeMillis |Number |Process uptime in milliseconds
+|jobsTotal |Number |Total jobs submitted since startup
+|running |Number |Currently running jobs
+|queued |Number |Jobs waiting to start
+|completed |Number |Successfully completed jobs
+|failed |Number |Failed jobs
+|rowsTotal |Number |Total rows written across all completed jobs
+|===
+
+[source,json]
+----
+{
+  "heapUsedBytes": 45678912,
+  "heapMaxBytes": 536870912,
+  "uptimeMillis": 123456,
+  "jobsTotal": 10,
+  "running": 1,
+  "queued": 0,
+  "completed": 8,
+  "failed": 1,
+  "rowsTotal": 98765
+}
+----
+
+== Connections
+
+=== Connection Object
+
+A saved connection stores the details needed to reach a database without re-entering them for every job.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|id |String |Unique connection identifier
+|name |String |Human-readable connection name
+|driver |String |JDBC driver class name
+|url |String |JDBC connection URL
+|user |String |Database username
+|passwordEnv |String |Environment variable name holding the password
+|lastUsedEpochMs |Number |Epoch milliseconds of the last time this connection was used (null if never)
+|status |String |Last known connectivity status
+|statusMessage |String |Human-readable status detail
+|ok |Boolean |Whether the last connectivity test passed
+|===
+
+[NOTE]
+====
+The password is never stored or returned; only the environment variable name (`passwordEnv`) is persisted.
+====
+
+=== List Connections
+
+`GET /api/connections`
+
+Returns a JSON array of connection objects.
+
+=== Create a Connection
+
+`POST /api/connections`
+
+Content type: `application/x-www-form-urlencoded`. Requires the CSRF header.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Required |Description
+
+|name |Yes |Human-readable name for the connection
+|driver |Yes |JDBC driver class name
+|url |Yes |JDBC connection URL
+|user |Yes |Database username
+|passwordEnv |No |Environment variable name holding the password
+|===
+
+Returns the created connection object (200), or 400 with `{"error":"..."}`.
+
+=== Update a Connection
+
+`PUT /api/connections/\{id}`
+
+Content type: `application/x-www-form-urlencoded`. Requires the CSRF header.
+Same form fields as <<_create_a_connection>>.
+
+Returns the updated connection object (200), or 400/404.
+
+=== Delete a Connection
+
+`DELETE /api/connections/\{id}`
+
+Requires the CSRF header. Returns 204 No Content on success, or 404 if not found.
+
+=== Test a Saved Connection
+
+`POST /api/connections/\{id}/test`
+
+Requires the CSRF header. Tests the saved connection and records the reachability status in memory.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|ok |Boolean |Whether the connection succeeded
+|message |String |Human-readable result message
+|serverInfo |String |Database server version string (null if the test failed)
+|===
+
+[source,json]
+----
+{"ok":true,"message":"Connected successfully","serverInfo":"PostgreSQL 15.3"}
+----
+
+=== Ad-hoc Connection Test
+
+`POST /api/connections/test`
+
+Requires the CSRF header. Tests a connection without saving it.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Required |Description
+
+|url |Yes |JDBC connection URL
+|user |Yes |Database username
+|passwordEnv |No |Environment variable name holding the password
+|password |No |Password (plain text; prefer passwordEnv)
+|===
+
+Response shape is identical to <<_test_a_saved_connection>>.
+
+== End-to-End Examples
+
+The following examples show a complete workflow using curl.
+
+=== Submit a Job
+
+[source,bash]
+----
+curl -s -X POST http://localhost:8080/api/jobs \
+  -H "X-Requested-By: jdbc-export" \
+  -d "url=jdbc:postgresql://localhost/mydb" \
+  -d "user=analyst" \
+  -d "passwordEnv=ANALYTICS_PW" \
+  -d "sql=SELECT * FROM orders WHERE created_at > '2024-01-01'" \
+  -d "format=csv" \
+  -d "output=/tmp/orders.csv"
+----
+
+=== Create a Connection then Test It
+
+[source,bash]
+----
+# Create the connection
+curl -s -X POST http://localhost:8080/api/connections \
+  -H "X-Requested-By: jdbc-export" \
+  -d "name=Analytics DB" \
+  -d "url=jdbc:postgresql://localhost/analytics" \
+  -d "user=analyst" \
+  -d "passwordEnv=ANALYTICS_PW"
+
+# Test the connection (replace CONNECTION_ID with the id from the response above)
+curl -s -X POST http://localhost:8080/api/connections/CONNECTION_ID/test \
+  -H "X-Requested-By: jdbc-export"
+----
+
+== Schedules
+
+=== Schedule Object
+
+A schedule object is returned by most schedule endpoints.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Type |Description
+
+|id |String |Unique schedule identifier (UUID).
+|name |String |Human-readable schedule name.
+|enabled |Boolean |Whether the schedule fires automatically.
+|connectionId |String |ID of the saved connection used for this schedule.
+|sql |String |SQL query to execute.
+|format |String |Output format: csv, tsv, json, ndjson, parquet.
+|compression |String |Parquet codec (default SNAPPY); ignored for other formats.
+|outputPattern |String |Output path template with time placeholders.
+|overwrite |Boolean |Whether to overwrite an existing output file.
+|triggerType |String |`cron`, `interval`, or `once`.
+|cron |String |Cron expression (when triggerType is cron).
+|every |Number |Interval count (when triggerType is interval).
+|unit |String |Interval unit: minute, hour, or day (when triggerType is interval).
+|at |String |Wall-clock time yyyy-MM-dd HH:mm (when triggerType is once).
+|nextRunEpochMs |Number |Computed next fire time in epoch milliseconds, or null.
+|lastRunEpochMs |Number |Epoch milliseconds of the last run, or null.
+|lastStatus |String |Status of the last run (queued/running/completed/failed), or null.
+|===
+
+[NOTE]
+====
+No credentials are ever present in a schedule object.
+Database connection details come from the referenced saved connection.
+====
+
+=== List Schedules
+
+`GET /api/schedules`
+
+Returns a JSON array of schedule objects. No CSRF header required (read-only).
+
+=== Create a Schedule
+
+`POST /api/schedules`
+
+Content type: `application/x-www-form-urlencoded`. Requires the CSRF header.
+
+[cols="2,1,4",options="header"]
+|===
+|Field |Required |Description
+
+|name |Yes |Human-readable schedule name.
+|connectionId |Yes |ID of the saved connection to use.
+|sql |Yes |SQL query to execute (SELECT or WITH only).
+|format |Yes |Output format: csv, tsv, json, ndjson, parquet.
+|compression |No |Parquet codec (default SNAPPY).
+|outputPattern |Yes |Output path template (e.g. `exports/report_pass:[{date}].csv`).
+|overwrite |No |Set to true to overwrite existing files (default false).
+|triggerType |Yes |cron, interval, or once.
+|cron |No |Cron expression (required when triggerType is cron).
+|every |No |Interval count (required when triggerType is interval).
+|unit |No |Interval unit: minute, hour, or day (required when triggerType is interval).
+|at |No |Wall-clock time yyyy-MM-dd HH:mm (required when triggerType is once).
+|enabled |No |true or false (default true).
+|===
+
+Returns the created schedule object (200), or 400 with `{"error":"..."}`.
+
+[source,bash]
+----
+curl -s -X POST http://localhost:8080/api/schedules \
+  -H "X-Requested-By: jdbc-export" \
+  -d "name=Daily orders export" \
+  -d "connectionId=550e8400-e29b-41d4-a716-446655440000" \
+  -d "sql=select o.id as order_id, o.customer_id as customer_id, o.total as total, o.created_at as created_at from orders o order by o.id" \
+  -d "format=parquet" \
+  -d "outputPattern=exports/orders_{date}.parquet" \
+  -d "triggerType=cron" \
+  -d "cron=0 2 * * *" \
+  -d "enabled=true"
+----
+
+=== Update a Schedule
+
+`PUT /api/schedules/\{id}`
+
+Content type: `application/x-www-form-urlencoded`. Requires the CSRF header.
+Accepts the same form fields as <<_create_a_schedule>>.
+
+Returns the updated schedule object (200), or 400/404.
+
+=== Delete a Schedule
+
+`DELETE /api/schedules/\{id}`
+
+Requires the CSRF header. Returns 204 No Content on success, or 404 if not found.
+
+=== Run a Schedule Now
+
+`POST /api/schedules/\{id}/run`
+
+Requires the CSRF header. Fires the schedule immediately, bypassing its trigger. Returns a job object reference:
+
+[source,json]
+----
+{"jobId":"a1b2c3"}
+----
+
+Returns 400 if the schedule is invalid or 404 if not found.
+
+[source,bash]
+----
+curl -s -X POST http://localhost:8080/api/schedules/SCHEDULE_ID/run \
+  -H "X-Requested-By: jdbc-export"
+----
+
+=== Toggle a Schedule
+
+`POST /api/schedules/\{id}/toggle`
+
+Requires the CSRF header. Flips the `enabled` flag: disables an enabled schedule, or re-enables a disabled one.
+
+Returns the updated schedule object (200), or 404 if not found.
+
+[TIP]
+====
+To manage schedules through the browser console, see xref:daemon-dashboard.adoc[Daemon Dashboard].
+For the full schedules feature reference, see xref:schedules.adoc[Schedules].
+====
+
+== See Also
+
+* xref:connections.adoc[Connections]
+* xref:daemon-dashboard.adoc[Daemon Dashboard]
+* xref:schedules.adoc[Schedules]
+* xref:security.adoc[Security]
+* xref:configuration.adoc[Configuration]

@@ -1,0 +1,109 @@
+= Architecture
+:description: Internal pipeline design, package structure, and key contracts for sql-to-file-dump
+
+== Overview
+
+`sql-to-file-dump` is built on Quarkus 3.36.2 with Picocli.
+The core design is a linear streaming pipeline: no row is ever buffered in memory beyond what JDBC fetches at a time.
+Java 25 is used for compile and runtime and is auto-downloaded by the Gradle toolchain; Java 17 or later is required only to bootstrap the build.
+
+== Export pipeline
+
+Each export follows seven sequential steps:
+
+1. *`JdbcExportApplication`* — the Quarkus application entry point.
+   Before calling `Quarkus.run()`, it configures HTTP binding: the HTTP server is disabled for standard CLI exports so that no port is ever opened, and enabled for the `daemon` subcommand.
+
+2. *`cli/JdbcExportCommand`* — the `@TopCommand` Picocli command.
+   It parses and validates all options and is the single point in the codebase that catches `ExportException` and maps it to the process exit code.
+
+3. *Input resolution* — three collaborating components resolve the inputs:
+   * `jdbc/PasswordResolver` — resolves the database password from an environment variable (`--password-env`) or an inline value (`--password`).
+   * `jdbc/SqlInputResolver` — reads the SQL statement from `--sql` or from a file specified by `--sql-file`.
+   * `jdbc/SqlSafetyValidator` — enforces the read-only contract; it rejects any statement that is not a `SELECT` or a `WITH`.
+
+4. *`jdbc/JdbcConnectionFactory`* — opens a read-only, autocommit-off JDBC connection using the resolved URL, username, and password.
+
+5. *`jdbc/ResultSetSchemaReader`* — executes the SQL query and reads column metadata up front, producing a `List<ResultSetColumn>` that describes the names and JDBC types of all columns before any row data is processed.
+
+6. *`writer/RowWriterFactory`* — inspects the requested format and instantiates the correct `RowWriter` implementation.
+
+7. *`jdbc/JdbcExporter`* — opens a forward-only, read-only `ResultSet` and streams rows one at a time into the writer.
+   An optional `ProgressListener` callback allows callers such as the daemon to observe live row counts without coupling the exporter to any particular reporting mechanism.
+
+NOTE: Every writer streams — the full result set is never held in memory.
+JDBC fetch size (controlled by `--fetch-size`, default `1000`) determines how many rows are retrieved from the database server per network round trip.
+
+== Key contracts and components
+
+`writer/RowWriter`::
+The central interface implemented by every format writer.
+It declares four methods: `start(ResultSetMetaData)`, `writeRow(ResultSet)`, `finish()`, and `close()`.
+`start` is called once before any rows are processed; `finish` is called after the last row and before `close`.
+
+`DelimitedTextRowWriter`::
+A shared `RowWriter` implementation used by both CSV and TSV formats.
+The delimiter character is the only difference between the two.
+
+`parquet/AvroSchemaFactory`::
+Builds an Apache Avro schema from the `List<ResultSetColumn>` produced by `ResultSetSchemaReader`.
+The Avro schema is then used by the Parquet writer to define the file structure.
+
+`parquet/AvroFieldNameSanitizer`::
+Rewrites JDBC column names into valid Avro identifiers (alphanumeric and underscore only).
+If two columns produce the same sanitised name, the tool fails immediately with a clear error message.
+Users must resolve the conflict with SQL column aliases.
+
+`error/ExportException` and `error/ExitCodes`::
+`ExportException` is the single exception type thrown by all pipeline components.
+It carries an `ExitCodes` value that identifies the class of failure.
+`JdbcExportCommand.call()` is the only place where `ExportException` is caught and converted to a process exit code.
+See xref:cli-reference.adoc[CLI Reference] for the full list of exit codes.
+
+== Package structure
+
+[cols="2,3"]
+|===
+|Package |Responsibility
+
+|`com.example.jdbcexport`
+|Application entry point (`JdbcExportApplication`); HTTP lifecycle configuration
+
+|`com.example.jdbcexport.cli`
+|Picocli command (`JdbcExportCommand`); `ExportOptions` record that carries the parsed options through the pipeline
+
+|`com.example.jdbcexport.jdbc`
+|JDBC utilities: connection factory, schema reader, exporter, SQL safety validator, password resolver, SQL input resolver
+
+|`com.example.jdbcexport.writer`
+|`RowWriter` interface, `RowWriterFactory`, and all format writer implementations (JSON, NDJSON, CSV/TSV, Parquet)
+
+|`com.example.jdbcexport.parquet`
+|Parquet/Avro schema building (`AvroSchemaFactory`) and field-name sanitisation (`AvroFieldNameSanitizer`)
+
+|`com.example.jdbcexport.error`
+|`ExportException` and `ExitCodes` — the structured error model used throughout the pipeline
+
+|`com.example.jdbcexport.daemon`
+|Daemon subcommand (`DaemonCommand`), in-memory job registry and executor (`ExportJobService`), REST resource (`DashboardResource`), and Qute HTML templates
+|===
+
+== Daemon integration
+
+The daemon subcommand reuses the same seven-step export pipeline described above.
+Each submitted job runs on a virtual-thread executor, one virtual thread per job, so many concurrent exports are possible without blocking platform threads.
+
+The `JdbcExporter` `ProgressListener` callback delivers live row counts to `ExportJobService` as each job runs.
+The job service exposes those counts via the REST API and the Sluice dashboard so operators can observe progress in real time.
+
+For full details on running and using the daemon, see xref:daemon-dashboard.adoc[Sluice Daemon Dashboard] and xref:rest-api.adoc[REST API].
+
+== Known limitations
+
+* SQL parameters (prepared-statement placeholders) are not supported; all values must be embedded in the SQL text.
+* `DECIMAL` and `NUMERIC` columns are stored as strings in Parquet output.
+  This avoids precision and scale issues with the Avro decimal logical type; native decimal support is a future enhancement.
+* No cloud object storage output targets (Amazon S3, Azure Blob Storage, Google Cloud Storage).
+* No parallel or partitioned exports; the pipeline is single-threaded per job.
+* Native image compilation (GraalVM) is not guaranteed and has not been tested.
+* Query cancellation and timeout are not yet implemented and are planned for a future release.

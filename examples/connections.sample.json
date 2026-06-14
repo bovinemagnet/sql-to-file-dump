@@ -1,0 +1,12 @@
+[
+  {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "name": "analytics-pg",
+    "driver": "postgres",
+    "url": "jdbc:postgresql://localhost:5432/appdb",
+    "user": "app_ro",
+    "passwordEnv": "DB_PASSWORD",
+    "createdAt": "2026-01-01T00:00:00Z",
+    "lastUsedAt": null
+  }
+]

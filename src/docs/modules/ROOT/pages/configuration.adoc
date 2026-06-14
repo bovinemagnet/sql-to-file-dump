@@ -1,0 +1,314 @@
+= Configuration
+:description: Reference for all configuration properties, environment variables, and system properties used by jdbc-export.
+
+This page documents every configuration knob available to `jdbc-export`, whether you are running a one-shot export or hosting the daemon dashboard.
+Configuration is layered: `application.properties` provides defaults, and system properties or environment variables override those values at launch time.
+
+== HTTP Bind Settings
+
+These properties control the network interface and port that the xref:daemon-dashboard.adoc[daemon dashboard] listens on.
+They are standard Quarkus HTTP configuration properties.
+
+[cols="2,1,3",options="header"]
+|===
+|Property |Default |Notes
+
+|`quarkus.http.host`
+|`localhost`
+|The daemon's `--host` option maps onto this property at startup.
+
+|`quarkus.http.port`
+|`8080`
+|The daemon's `--port` option maps onto this property at startup.
+|===
+
+The `--allow-remote` flag must be supplied when binding to any non-loopback address.
+This guard exists because the dashboard has no built-in authentication; without it the daemon refuses to bind to an externally reachable interface.
+See xref:security.adoc[] for a full description of the security model.
+
+See xref:daemon-dashboard.adoc[] for instructions on starting the daemon.
+
+== Saved-Connections File
+
+`jdbc-export` can read named database connections from a JSON file, avoiding the need to repeat connection strings and credentials on every invocation.
+
+[cols="2,2,2",options="header"]
+|===
+|Property |Default |Description
+
+|`sluice.connections.file`
+|`${user.home}/.sluice/connections.json`
+|Path to the saved-connections JSON file.
+
+|`sluice.schedule.file`
+|`${user.home}/.sluice/schedule.json`
+|Path to the schedules JSON file (see xref:schedules.adoc[]).
+|===
+
+You can override the default path in `application.properties`:
+
+[source,properties]
+----
+sluice.connections.file=/path/to/connections.json
+----
+
+Or pass it as a JVM system property at launch time:
+
+[source,bash]
+----
+java -Dsluice.connections.file=/path/to/connections.json \
+     -jar build/quarkus-app/quarkus-run.jar daemon
+----
+
+See xref:connections.adoc[] for the connections file format and supported fields.
+
+== Password Environment Variables
+
+Passwords are never stored on disk.
+Instead, `jdbc-export` holds only the *name* of an environment variable — the `--password-env` CLI option on a one-shot export, or the `passwordEnv` field inside a saved connection.
+The actual secret is read from the environment at run time.
+
+Set the variable in your shell before starting the process:
+
+[source,bash]
+----
+export DB_PASSWORD=supersecret
+java -jar build/quarkus-app/quarkus-run.jar \
+     --url jdbc:postgresql://localhost/mydb \
+     --user myuser \
+     --password-env DB_PASSWORD \
+     --sql "select id as id, total as total from orders order by id" \
+     --format json \
+     --output orders.json
+----
+
+For the daemon, export the variables in the shell or service environment that launches the process.
+
+TIP: Consider using a `.env` file sourced by your shell script, or a systemd `EnvironmentFile` directive, to manage secrets outside the process invocation and keep them out of your shell history.
+
+
+== Logging and Banner
+
+The project ships with the following defaults in `application.properties`:
+
+[source,properties]
+----
+quarkus.banner.enabled=false
+quarkus.log.level=INFO
+----
+
+The startup banner is disabled so that CLI output is not polluted with Quarkus branding.
+You can change the root log level or set per-category levels using standard Quarkus logging configuration:
+
+[source,properties]
+----
+# Raise the root level to DEBUG
+quarkus.log.level=DEBUG
+
+# Or target only the jdbc-export package
+quarkus.log.category."com.example.jdbcexport".level=DEBUG
+----
+
+== Complete Example application.properties
+
+The following block shows all documented properties together with illustrative values.
+Place this file at `src/main/resources/application.properties` (for build-time configuration) or supply individual properties at runtime as described in <<system-properties-and-environment-variables>>.
+
+[source,properties]
+----
+quarkus.http.host=localhost
+quarkus.http.port=8080
+quarkus.banner.enabled=false
+quarkus.log.level=INFO
+sluice.connections.file=${user.home}/.sluice/connections.json
+sluice.schedule.file=${user.home}/.sluice/schedule.json
+----
+
+[#system-properties-and-environment-variables]
+== System Properties and Environment Variable Overrides
+
+Quarkus follows the MicroProfile Config specification, which means system properties and environment variables take precedence over values in `application.properties`.
+You do not need to rebuild the application to change a property at runtime.
+
+The table below shows each property in all three forms:
+
+[cols="3,3,3",options="header"]
+|===
+|`application.properties` key |`-D` system property |Environment variable
+
+|`quarkus.http.host`
+|`-Dquarkus.http.host=localhost`
+|`QUARKUS_HTTP_HOST`
+
+|`quarkus.http.port`
+|`-Dquarkus.http.port=8080`
+|`QUARKUS_HTTP_PORT`
+
+|`quarkus.banner.enabled`
+|`-Dquarkus.banner.enabled=false`
+|`QUARKUS_BANNER_ENABLED`
+
+|`quarkus.log.level`
+|`-Dquarkus.log.level=INFO`
+|`QUARKUS_LOG_LEVEL`
+
+|`sluice.connections.file`
+|`-Dsluice.connections.file=/path/to/connections.json`
+|`SLUICE_CONNECTIONS_FILE`
+
+|`sluice.schedule.file`
+|`-Dsluice.schedule.file=/path/to/schedule.json`
+|`SLUICE_SCHEDULE_FILE`
+|===
+
+NOTE: Quarkus converts property names to environment variable form by upper-casing all characters and replacing dots and hyphens with underscores.
+System properties and environment variables always win over `application.properties`, and command-line `-D` flags set system properties directly.
+
+== Worked Example: Daemon on a Custom Port with All-Interfaces Bind
+
+The following session starts the daemon on port 9090, bound to all network interfaces, with a custom connections file.
+
+[source,bash]
+----
+# 1. Make the database password available in the environment
+export DB_PASSWORD=supersecret
+
+# 2. Start the daemon (JVM -D flags go before -jar; daemon options after)
+java -Dsluice.connections.file=/etc/sluice/connections.json \
+  -jar build/quarkus-app/quarkus-run.jar daemon \
+  --port 9090 \
+  --host 0.0.0.0 \
+  --allow-remote
+----
+
+WARNING: Binding to `0.0.0.0` exposes the dashboard on every network interface of the host.
+Because the dashboard has no built-in authentication, you must restrict access using a firewall rule or place the service behind a reverse proxy before exposing it beyond localhost.
+See xref:security.adoc[] for recommended hardening steps.
+
+== Scheduling exports
+
+The daemon includes a built-in scheduler.
+Schedules are stored in `~/.sluice/schedule.json` (configurable via `sluice.schedule.file`) and fired automatically by the running daemon.
+The Sluice console's Schedules view — described at xref:daemon-dashboard.adoc[] — provides a full management interface: create, edit, delete, enable/disable, and trigger schedules without touching the file directly.
+See xref:schedules.adoc[] for the schedule format and trigger conditions, and xref:rest-api.adoc[] for the REST API that backs the console.
+
+=== Without the daemon: OS schedulers
+
+If you do not want to keep the daemon running — for example in a fully unattended or headless environment — you can invoke the one-shot CLI directly from an operating-system scheduler: *cron*, a *systemd timer*, or *launchd*.
+
+The key distinction is:
+
+* *Built-in scheduler* — requires the daemon to be running; schedules are managed from the Sluice console and visible in the job history.
+* *OS scheduler* — independent of the daemon; each run is an isolated CLI invocation and does not appear in the daemon console's in-memory job history.
+
+A ready-made wrapper ships at `examples/scheduled-export.sh` in the repository.
+It exports the `orders` table from an example `appdb` database to a dated Parquet file and reads its database password from a named environment variable (never an embedded secret), consistent with the password-handling approach described on this page and in xref:connections.adoc[].
+
+==== Example export command
+
+The following command is the core invocation that the wrapper script runs:
+
+[source,bash]
+----
+java -jar build/quarkus-app/quarkus-run.jar \
+  --url jdbc:postgresql://localhost:5432/appdb \
+  --user app_ro \
+  --sql "select o.id as order_id, o.customer_id as customer_id, o.total as total, o.created_at as created_at from orders o order by o.id" \
+  --format parquet \
+  --parquet-compression zstd \
+  --output exports/orders_$(date +%F).parquet \
+  --overwrite
+----
+
+NOTE: The password is supplied via `--password-env <NAME>`; it is omitted here because this example database needs no password — add the flag if yours does.
+Set the named environment variable in your scheduler's environment before the job runs.
+
+==== Wrapper script environment variables
+
+The wrapper script honours the following environment variables, allowing you to override defaults without editing the script:
+
+[cols="2,3,2",options="header"]
+|===
+|Variable |Purpose |Default
+
+|`JDBC_EXPORT_JAR`
+|Path to the Quarkus runner jar
+|`build/quarkus-app/quarkus-run.jar`
+
+|`EXPORT_DIR`
+|Directory for the dated output files
+|`exports`
+
+|`DB_URL`
+|JDBC URL
+|`jdbc:postgresql://localhost:5432/appdb`
+
+|`DB_USER`
+|Database user
+|`app_ro`
+
+|`PASSWORD_ENV`
+|Name of the env var holding the password (optional)
+|_(unset)_
+|===
+
+==== cron
+
+Add the following entry to your crontab (`crontab -e`) to run the wrapper nightly at 02:00:
+
+[source,bash]
+----
+# Nightly at 02:00 — export the orders table from appdb
+0 2 * * * /path/to/sql-to-file-dump/examples/scheduled-export.sh >> /tmp/jdbc-export.log 2>&1
+----
+
+If the export requires a password, export the environment variable in cron's environment — either by setting it on a line above the entry in the crontab, or by sourcing a credentials file inside the wrapper script itself.
+
+==== systemd timer
+
+Create two unit files — a `oneshot` service and a daily timer:
+
+[source,ini]
+----
+# /etc/systemd/system/jdbc-export.service
+[Unit]
+Description=Export the orders table
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/sql-to-file-dump
+# Environment=DB_PASSWORD=...        # only if the database needs a password
+# Environment=PASSWORD_ENV=DB_PASSWORD
+ExecStart=/path/to/sql-to-file-dump/examples/scheduled-export.sh
+----
+
+[source,ini]
+----
+# /etc/systemd/system/jdbc-export.timer
+[Unit]
+Description=Daily orders export
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+----
+
+Enable and start the timer with:
+
+[source,bash]
+----
+sudo systemctl daemon-reload
+sudo systemctl enable --now jdbc-export.timer
+sudo systemctl list-timers jdbc-export.timer
+----
+
+==== launchd (macOS)
+
+macOS users can achieve the same result with a launchd plist that uses a `StartCalendarInterval` key to trigger the same wrapper script on a schedule.
+Refer to the `launchd.plist(5)` man page for the full plist format.
+
+TIP: OS-scheduled runs are independent CLI invocations and do not appear in the daemon console's in-memory job history.
+The console and its REST API (xref:rest-api.adoc[]) cover interactive, ad-hoc, and daemon-scheduled runs; OS schedulers cover fully unattended headless ones.

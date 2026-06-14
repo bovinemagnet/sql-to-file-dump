@@ -3,17 +3,27 @@ package com.example.jdbcexport.daemon;
 import com.example.jdbcexport.cli.OutputFormat;
 import com.example.jdbcexport.error.ExportException;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ExportJobServiceTest {
+
+    @BeforeAll
+    static void registerDriver() throws Exception {
+        // A @QuarkusTest elsewhere in the suite can trigger DriverManager's one-time
+        // ServiceLoader scan under the Quarkus classloader, leaving the DuckDB driver
+        // invisible to this classloader. Register it explicitly.
+        DriverManager.registerDriver(new org.duckdb.DuckDBDriver());
+    }
 
     private final ExportJobService service = new ExportJobService();
 
@@ -32,6 +42,34 @@ class ExportJobServiceTest {
         assertThat(job.getRowCount()).isEqualTo(1);
         assertThat(job.getDurationMillis()).isNotNull();
         assertThat(Files.readAllLines(output)).containsExactly("a,b", "1,2");
+    }
+
+    @Test
+    void capturesRunMetrics(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("metrics.csv");
+        ExportJob job = service.submit(request("SELECT 1 AS a, 2 AS b", output));
+
+        awaitFinished(job);
+
+        assertThat(job.getStatus()).isEqualTo(ExportJob.Status.COMPLETED);
+        assertThat(job.getDriver()).isEqualTo("duckdb");
+        assertThat(job.getFetchSize()).isEqualTo(1000);
+        assertThat(job.getColumnCount()).isEqualTo(2);
+        assertThat(job.getServerInfo()).isNotBlank();
+        assertThat(job.getOutputBytes()).isPositive();
+        assertThat(job.getCompression()).isEqualTo("SNAPPY");
+    }
+
+    @Test
+    void metricsSnapshotReportsHeapAndCounts(@TempDir Path tempDir) throws Exception {
+        ExportJob job = service.submit(request("SELECT 1 AS a", tempDir.resolve("m.csv")));
+        awaitFinished(job);
+
+        ExportJobService.DaemonMetrics metrics = service.metrics();
+
+        assertThat(metrics.heapUsedBytes()).isPositive();
+        assertThat(metrics.jobsTotal()).isGreaterThanOrEqualTo(1);
+        assertThat(metrics.completed()).isGreaterThanOrEqualTo(1);
     }
 
     @Test

@@ -14,7 +14,7 @@ import com.example.jdbcexport.metadata.ExportMetadataWriter;
 import com.example.jdbcexport.writer.RowWriter;
 import com.example.jdbcexport.writer.RowWriterFactory;
 import io.quarkus.picocli.runtime.annotations.TopCommand;
-import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.context.Dependent;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -27,21 +27,23 @@ import java.util.concurrent.Callable;
 import java.util.logging.Logger;
 
 @TopCommand
-@ApplicationScoped
+@Dependent
 @Command(
     name = "jdbc-export",
     description = "Export SQL query results to JSON, NDJSON, CSV, TSV, or Parquet",
     mixinStandardHelpOptions = true,
-    version = "1.0.0"
+    version = "1.0.0",
+    subcommands = com.example.jdbcexport.daemon.DaemonCommand.class
 )
 public class JdbcExportCommand implements Callable<Integer> {
 
     private static final Logger LOG = Logger.getLogger(JdbcExportCommand.class.getName());
 
-    @Option(names = "--url", description = "JDBC URL", required = true)
+    // Not annotation-required: that would also make them mandatory for the daemon subcommand.
+    @Option(names = "--url", description = "JDBC URL (required)")
     String url;
 
-    @Option(names = "--user", description = "Database username", required = true)
+    @Option(names = "--user", description = "Database username (required)")
     String user;
 
     @Option(names = "--password", description = "Database password")
@@ -198,6 +200,12 @@ public class JdbcExportCommand implements Callable<Integer> {
     }
 
     private void validateRequest() {
+        if (url == null || url.isBlank()) {
+            throw new ExportException(ExitCodes.INVALID_ARGUMENTS, "Missing required option: --url");
+        }
+        if (user == null || user.isBlank()) {
+            throw new ExportException(ExitCodes.INVALID_ARGUMENTS, "Missing required option: --user");
+        }
         if (sql != null && sqlFile != null) {
             throw new ExportException(ExitCodes.SQL_INPUT_ERROR, "Specify either --sql or --sql-file, not both.");
         }

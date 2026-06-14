@@ -1,0 +1,31 @@
+<div class="card">
+  <h2>Job {job.id}</h2>
+  <dl>
+    <dt>Status</dt>
+    <dd><span class="status status-{job.status}">{job.status}</span></dd>
+    <dt>Submitted</dt>
+    <dd>{job.submittedAt}</dd>
+    <dt>JDBC URL</dt>
+    <dd>{job.url}</dd>
+    <dt>User</dt>
+    <dd>{job.user}</dd>
+    <dt>Format</dt>
+    <dd>{job.format}</dd>
+    <dt>Output</dt>
+    <dd class="path">{job.output}</dd>
+    {#if job.completed}
+    <dt>Rows</dt>
+    <dd>{job.rowCount}</dd>
+    {/if}
+    {#if job.durationMillis}
+    <dt>Duration</dt>
+    <dd>{job.durationMillis} ms</dd>
+    {/if}
+    {#if job.error}
+    <dt>Error</dt>
+    <dd class="error">{job.error}</dd>
+    {/if}
+  </dl>
+  <h3>SQL</h3>
+  <pre>{job.sql}</pre>
+</div>

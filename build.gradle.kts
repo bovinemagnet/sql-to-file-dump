@@ -1,9 +1,9 @@
 plugins {
     java
-    id("io.quarkus") version "3.24.5"
+    id("io.quarkus") version "3.36.2"
 }
 
-val quarkusVersion = "3.24.5"
+val quarkusVersion = "3.36.2"
 val commonsCsvVersion = "1.12.0"
 val parquetVersion = "1.14.4"
 val hadoopVersion = "3.4.1"
@@ -29,6 +29,8 @@ dependencies {
 
     implementation("io.quarkus:quarkus-picocli")
     implementation("io.quarkus:quarkus-arc")
+    implementation("io.quarkus:quarkus-rest-qute")
+    implementation("org.webjars.npm:htmx.org:2.0.4")
 
     implementation("com.fasterxml.jackson.core:jackson-core")
     implementation("com.fasterxml.jackson.core:jackson-databind")
@@ -43,6 +45,7 @@ dependencies {
     runtimeOnly("com.oracle.database.jdbc:ojdbc11:23.6.0.24.10")
 
     testImplementation("io.quarkus:quarkus-junit5")
+    testImplementation("io.rest-assured:rest-assured")
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.assertj:assertj-core:$assertjVersion")
     testImplementation("org.testcontainers:junit-jupiter:$testcontainersVersion")
@@ -52,4 +55,6 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // Required by Quarkus @QuarkusMainTest launcher on Java 24+.
+    jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
 }

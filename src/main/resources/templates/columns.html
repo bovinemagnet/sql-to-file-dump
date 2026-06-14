@@ -1,0 +1,25 @@
+<div class="card">
+  <h2>Schema</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Label</th>
+        <th>JDBC type</th>
+        <th>Nullable</th>
+        <th>Output name</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#for col in columns}
+      <tr>
+        <td>{col.index}</td>
+        <td>{col.label}</td>
+        <td>{col.jdbcTypeName}</td>
+        <td>{col.nullable}</td>
+        <td>{col.outputName}</td>
+      </tr>
+      {/for}
+    </tbody>
+  </table>
+</div>

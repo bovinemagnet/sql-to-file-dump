@@ -59,6 +59,17 @@ public class JsonArrayRowWriter implements RowWriter {
     }
 
     @Override
+    public void writeRow(com.example.jdbcexport.transform.Row row) throws Exception {
+        generator.writeStartObject();
+        for (ResultSetColumn column : columns) {
+            generator.writeFieldName(column.outputName());
+            writeValue(generator, row.get(column.outputName()));
+        }
+        generator.writeEndObject();
+        rowCount++;
+    }
+
+    @Override
     public ExportWriteResult finish() throws Exception {
         if (generator != null) {
             generator.writeEndArray();

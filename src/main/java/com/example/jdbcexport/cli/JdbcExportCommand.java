@@ -11,6 +11,15 @@ import com.example.jdbcexport.jdbc.SqlInputResolver;
 import com.example.jdbcexport.jdbc.SqlSafetyValidator;
 import com.example.jdbcexport.metadata.ExportMetadata;
 import com.example.jdbcexport.metadata.ExportMetadataWriter;
+import com.example.jdbcexport.transform.ErrorStrategy;
+import com.example.jdbcexport.transform.TransformConfig;
+import com.example.jdbcexport.transform.TransformConfigLoader;
+import com.example.jdbcexport.transform.TransformMetrics;
+import com.example.jdbcexport.transform.TransformPipeline;
+import com.example.jdbcexport.transform.TransformRegistry;
+import com.example.jdbcexport.transform.metrics.TransformMetricsPublisher;
+import com.example.jdbcexport.transform.metrics.TransformMetricsSettings;
+import io.micrometer.core.instrument.Metrics;
 import com.example.jdbcexport.writer.RowWriter;
 import com.example.jdbcexport.writer.RowWriterFactory;
 import io.quarkus.picocli.runtime.annotations.TopCommand;
@@ -97,6 +106,18 @@ public class JdbcExportCommand implements Callable<Integer> {
     @Option(names = "--parquet-compression", description = "Parquet compression: SNAPPY, GZIP, ZSTD, UNCOMPRESSED", defaultValue = "SNAPPY")
     String parquetCompression;
 
+    @Option(names = "--transform", arity = "1",
+        description = "Outbound transform, repeatable. e.g. rename:old=new, drop:a,b, keep:a,b, "
+            + "default:col=value, mask:email, map:status=A>Active,C>Closed, template:full={first} {last}")
+    java.util.List<String> transforms;
+
+    @Option(names = "--transforms-file", description = "Path to a JSON file describing the outbound transform pipeline")
+    String transformsFile;
+
+    @Option(names = "--on-transform-error",
+        description = "Behaviour when a transform fails on a row: fail (default), skipRow, keepOriginal")
+    String onTransformError;
+
     @Override
     public Integer call() {
         try {
@@ -123,6 +144,12 @@ public class JdbcExportCommand implements Callable<Integer> {
         String resolvedSql = SqlInputResolver.resolve(sql, sqlFile);
         SqlSafetyValidator.validate(resolvedSql);
         OutputFormat outputFormat = format == null ? null : parseFormat(format);
+
+        // Build the transform pipeline up front so configuration errors fail fast (before connecting).
+        ErrorStrategy cliErrorStrategy = onTransformError == null ? null : ErrorStrategy.fromConfig(onTransformError);
+        TransformConfig transformConfig = TransformConfigLoader.loadConfig(
+            transformsFile == null ? null : Path.of(transformsFile), transforms, cliErrorStrategy);
+        TransformPipeline pipeline = new TransformRegistry().build(transformConfig);
 
         if (!describe) {
             validateOutputRequirements();
@@ -167,9 +194,16 @@ public class JdbcExportCommand implements Callable<Integer> {
 
             Instant startedAt = Instant.now();
             List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, resolvedSql, fetchSize);
+            boolean transforming = !pipeline.isEmpty();
+            List<ResultSetColumn> outputColumns = pipeline.outputSchema(columns);
+            if (transformConfig.outputContract() != null) {
+                transformConfig.outputContract().validate(outputColumns);
+            }
 
-            try (RowWriter writer = new RowWriterFactory().create(options, columns)) {
-                JdbcExporter.ExportResult result = new JdbcExporter().export(connection, resolvedSql, fetchSize, maxRows, writer);
+            try (RowWriter writer = new RowWriterFactory().create(options, outputColumns, transforming)) {
+                JdbcExporter.ExportResult result = new JdbcExporter().export(
+                    connection, resolvedSql, fetchSize, maxRows, writer,
+                    JdbcExporter.ProgressListener.NONE, columns, pipeline);
                 Instant completedAt = Instant.now();
                 long durationMillis = completedAt.toEpochMilli() - startedAt.toEpochMilli();
 
@@ -177,6 +211,10 @@ public class JdbcExportCommand implements Callable<Integer> {
                     System.out.printf("Exported %d rows in %d ms%n", result.rowCount(), durationMillis);
                 }
                 System.out.printf("Export complete: %d rows -> %s%n", result.rowCount(), output);
+                if (transforming) {
+                    System.out.println(pipeline.metrics().summary());
+                    publishTransformMetrics(pipeline, outputFormat, durationMillis);
+                }
 
                 if (metadata != null) {
                     ExportMetadataWriter.write(
@@ -190,10 +228,24 @@ public class JdbcExportCommand implements Callable<Integer> {
                             startedAt.toString(),
                             completedAt.toString(),
                             durationMillis,
-                            columns
+                            outputColumns
                         ),
                         Path.of(metadata)
                     );
+                }
+            }
+        }
+    }
+
+    private void publishTransformMetrics(TransformPipeline pipeline, OutputFormat outputFormat, long durationMillis) {
+        TransformMetrics.Snapshot snapshot = pipeline.metrics().snapshot();
+        TransformMetricsSettings settings = TransformMetricsSettings.fromConfig();
+        TransformMetricsPublisher.publish(Metrics.globalRegistry, "cli", "cli",
+            outputFormat.name().toLowerCase(), snapshot, java.time.Duration.ofMillis(durationMillis), settings);
+        if (settings.enabled()) {
+            for (TransformMetrics.StepMetrics step : snapshot.steps()) {
+                if (settings.isSlow(step.totalMillis())) {
+                    LOG.warning("Slow transform \"" + step.name() + "\": " + step.totalMillis() + " ms");
                 }
             }
         }

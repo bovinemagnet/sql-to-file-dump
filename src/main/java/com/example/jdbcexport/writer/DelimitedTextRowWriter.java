@@ -58,6 +58,17 @@ public abstract class DelimitedTextRowWriter implements RowWriter {
     }
 
     @Override
+    public void writeRow(com.example.jdbcexport.transform.Row row) throws Exception {
+        Object[] values = new Object[columns.size()];
+        for (int i = 0; i < columns.size(); i++) {
+            ResultSetColumn column = columns.get(i);
+            values[i] = JdbcValueReader.stringify(row.get(column.outputName()), nullValue);
+        }
+        printer.printRecord(values);
+        rowCount++;
+    }
+
+    @Override
     public ExportWriteResult finish() throws Exception {
         close();
         return new ExportWriteResult(rowCount, outputPath);

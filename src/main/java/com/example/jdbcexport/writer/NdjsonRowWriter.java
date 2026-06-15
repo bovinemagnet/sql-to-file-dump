@@ -55,6 +55,21 @@ public class NdjsonRowWriter implements RowWriter {
     }
 
     @Override
+    public void writeRow(com.example.jdbcexport.transform.Row row) throws Exception {
+        try (JsonGenerator generator = jsonFactory.createGenerator(outputStream)) {
+            generator.disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+            generator.writeStartObject();
+            for (ResultSetColumn column : columns) {
+                generator.writeFieldName(column.outputName());
+                writeValue(generator, row.get(column.outputName()));
+            }
+            generator.writeEndObject();
+        }
+        outputStream.write('\n');
+        rowCount++;
+    }
+
+    @Override
     public ExportWriteResult finish() throws Exception {
         close();
         return new ExportWriteResult(rowCount, outputPath);

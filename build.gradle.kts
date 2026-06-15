@@ -1,6 +1,7 @@
 plugins {
     java
     id("io.quarkus") version "3.36.2"
+    id("me.champeau.jmh") version "0.7.3"
 }
 
 val quarkusVersion = "3.36.2"
@@ -31,6 +32,8 @@ dependencies {
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-rest-qute")
     implementation("io.quarkus:quarkus-rest-jackson")
+    implementation("io.quarkus:quarkus-micrometer")
+    implementation("io.quarkus:quarkus-micrometer-registry-prometheus")
     implementation("org.webjars.npm:htmx.org:2.0.4")
 
     implementation("com.fasterxml.jackson.core:jackson-core")
@@ -40,6 +43,7 @@ dependencies {
     implementation("com.cronutils:cron-utils:9.2.1")
 
     implementation("org.apache.commons:commons-csv:$commonsCsvVersion")
+    implementation("org.apache.commons:commons-jexl3:3.3")
 
     implementation("org.apache.parquet:parquet-avro:$parquetVersion")
     implementation("org.apache.hadoop:hadoop-common:$hadoopVersion")

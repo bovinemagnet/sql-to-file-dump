@@ -23,21 +23,29 @@ public class ParquetRowWriter implements RowWriter {
     private final Path outputPath;
     private final List<ResultSetColumn> columns;
     private final String compression;
+    private final boolean transforming;
     private Schema schema;
     private List<String> fieldNames;
     private ParquetWriter<GenericRecord> writer;
     private long rowCount;
 
     public ParquetRowWriter(Path outputPath, List<ResultSetColumn> columns, String compression) {
+        this(outputPath, columns, compression, false);
+    }
+
+    public ParquetRowWriter(Path outputPath, List<ResultSetColumn> columns, String compression, boolean transforming) {
         this.outputPath = outputPath;
         this.columns = columns;
         this.compression = compression;
+        this.transforming = transforming;
     }
 
     @Override
     public void start(ResultSetMetaData metaData) throws Exception {
         try {
-            AvroSchemaFactory.SchemaDefinition schemaDefinition = AvroSchemaFactory.buildSchema(columns);
+            AvroSchemaFactory.SchemaDefinition schemaDefinition = transforming
+                ? AvroSchemaFactory.buildCanonicalSchema(columns)
+                : AvroSchemaFactory.buildSchema(columns);
             schema = schemaDefinition.schema();
             fieldNames = schemaDefinition.fieldNames();
             writer = AvroParquetWriter.<GenericRecord>builder(new LocalParquetOutputFile(outputPath))
@@ -57,6 +65,20 @@ public class ParquetRowWriter implements RowWriter {
         GenericRecord record = new GenericData.Record(schema);
         for (int i = 0; i < columns.size(); i++) {
             record.put(fieldNames.get(i), AvroValueMapper.readValue(rs, columns.get(i)));
+        }
+        writer.write(record);
+        rowCount++;
+    }
+
+    @Override
+    public void writeRow(com.example.jdbcexport.transform.Row row) throws Exception {
+        GenericRecord record = new GenericData.Record(schema);
+        for (int i = 0; i < columns.size(); i++) {
+            ResultSetColumn column = columns.get(i);
+            Object value = AvroValueMapper.mapCanonical(
+                row.get(column.outputName()),
+                com.example.jdbcexport.jdbc.ValueKind.fromJdbcType(column.jdbcType()));
+            record.put(fieldNames.get(i), value);
         }
         writer.write(record);
         rowCount++;

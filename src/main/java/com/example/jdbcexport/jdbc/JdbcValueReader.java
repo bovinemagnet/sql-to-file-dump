@@ -63,6 +63,11 @@ public final class JdbcValueReader {
 
     public static String readAsString(ResultSet rs, int columnIndex, int jdbcType, String nullValue) throws SQLException {
         Object value = readAsObject(rs, columnIndex, jdbcType);
+        return stringify(value, nullValue);
+    }
+
+    /** Render a canonical value (see {@link #readAsObject}) as a string, using {@code nullValue} for nulls. */
+    public static String stringify(Object value, String nullValue) {
         return value == null ? nullValue : stringify(value);
     }
 

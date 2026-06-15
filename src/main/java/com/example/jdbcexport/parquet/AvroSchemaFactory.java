@@ -22,6 +22,19 @@ public final class AvroSchemaFactory {
     }
 
     public static SchemaDefinition buildSchema(List<ResultSetColumn> columns) {
+        return build(columns, false);
+    }
+
+    /**
+     * Build a schema for the transform path, where row values are in the canonical representation
+     * (see {@link com.example.jdbcexport.jdbc.ValueKind}). Dates, times, timestamps and binary are
+     * stored as strings and decimals as strings, matching what transforms and the text writers see.
+     */
+    public static SchemaDefinition buildCanonicalSchema(List<ResultSetColumn> columns) {
+        return build(columns, true);
+    }
+
+    private static SchemaDefinition build(List<ResultSetColumn> columns, boolean canonical) {
         var fields = SchemaBuilder.record("ExportRecord")
             .namespace("com.example.jdbcexport")
             .fields();
@@ -35,12 +48,24 @@ public final class AvroSchemaFactory {
                     "Duplicate Parquet field name detected after Avro sanitization: " + fieldName + ". Use explicit SQL aliases.");
             }
             fieldNames.add(fieldName);
+            Schema fieldSchema = canonical ? toCanonicalSchema(column.jdbcType()) : toAvroSchema(column.jdbcType());
             fields.name(fieldName)
-                .type(nullable(toAvroSchema(column.jdbcType())))
+                .type(nullable(fieldSchema))
                 .withDefault(null);
         }
 
         return new SchemaDefinition(fields.endRecord(), fieldNames);
+    }
+
+    private static Schema toCanonicalSchema(int jdbcType) {
+        return switch (com.example.jdbcexport.jdbc.ValueKind.fromJdbcType(jdbcType)) {
+            case BOOLEAN -> Schema.create(Schema.Type.BOOLEAN);
+            case INT -> Schema.create(Schema.Type.INT);
+            case LONG -> Schema.create(Schema.Type.LONG);
+            case FLOAT -> Schema.create(Schema.Type.FLOAT);
+            case DOUBLE -> Schema.create(Schema.Type.DOUBLE);
+            case DECIMAL, STRING -> Schema.create(Schema.Type.STRING);
+        };
     }
 
     private static Schema nullable(Schema schema) {

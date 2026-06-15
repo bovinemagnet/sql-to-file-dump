@@ -54,6 +54,15 @@ public class DashboardApiResource {
         return jobService.metrics();
     }
 
+    @GET
+    @Path("transformations")
+    public List<TransformationView> transformations() {
+        return jobService.jobs().stream()
+            .filter(ExportJob::isTransformsEnabled)
+            .map(TransformationView::from)
+            .toList();
+    }
+
     @POST
     @Path("jobs")
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
@@ -67,10 +76,13 @@ public class DashboardApiResource {
         @FormParam("output") String output,
         @FormParam("compression") String compression,
         @FormParam("connectionId") String connectionId,
+        @FormParam("transforms") String transformsText,
+        @FormParam("errorStrategy") String errorStrategy,
         @FormParam("overwrite") boolean overwrite) {
         try {
             ExportJobRequest request = new ExportJobRequest(
-                url, user, password, passwordEnv, sql, parseFormat(format), output, overwrite, compression);
+                url, user, password, passwordEnv, sql, parseFormat(format), output, overwrite, compression,
+                parseTransforms(transformsText), errorStrategy);
             ExportJob job = jobService.submit(request);
             if (connectionId != null && !connectionId.isBlank()) {
                 connectionStore.markUsed(connectionId);
@@ -104,6 +116,14 @@ public class DashboardApiResource {
         return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorView(e.getMessage())).build();
     }
 
+    /** One transform spec per line (inline shorthand); blank lines ignored. */
+    private static List<String> parseTransforms(String text) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        return text.lines().map(String::trim).filter(line -> !line.isEmpty()).toList();
+    }
+
     private OutputFormat parseFormat(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -116,6 +136,37 @@ public class DashboardApiResource {
     }
 
     public record SubmitView(String id, String output) {
+    }
+
+    /** Per-transform row for the dashboard Transformations tab. No row values are exposed. */
+    public record StepView(String name, String type, long rows, long errors,
+                           long durationMs, double avgPerRowMs, boolean slow) {
+    }
+
+    /** A job's transform pipeline summary: ordered steps, counts and timings only. */
+    public record TransformationView(
+        String jobId, String output, String status, String submittedAt, String errorStrategy,
+        long rowsIn, long rowsOut, long rowsDropped, Long totalDurationMs, List<StepView> steps
+    ) {
+        static TransformationView from(ExportJob j) {
+            var snapshot = j.getTransformMetrics();
+            long threshold = j.getSlowTransformThresholdMs();
+            List<StepView> steps = snapshot == null ? List.of() : snapshot.steps().stream()
+                .map(s -> new StepView(s.name(), s.type(), s.invocations(), s.failures(),
+                    s.totalMillis(), round(s.averageMillisPerRow()), s.totalMillis() >= threshold))
+                .toList();
+            return new TransformationView(
+                j.getId(), j.getOutput(), j.getStatus().name().toLowerCase(Locale.ROOT), j.getSubmittedAtDisplay(),
+                j.getErrorStrategy() == null ? "fail" : j.getErrorStrategy(),
+                snapshot == null ? 0 : snapshot.rowsIn(),
+                snapshot == null ? 0 : snapshot.rowsOut(),
+                snapshot == null ? 0 : snapshot.rowsDropped(),
+                j.getDurationMillis(), steps);
+        }
+
+        private static double round(double value) {
+            return Math.round(value * 1000.0) / 1000.0;
+        }
     }
 
     public record ErrorView(String error) {

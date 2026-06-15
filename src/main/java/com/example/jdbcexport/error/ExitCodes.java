@@ -8,6 +8,7 @@ public final class ExitCodes {
     public static final int OUTPUT_WRITE_ERROR = 4;
     public static final int SCHEMA_ERROR = 5;
     public static final int UNSUPPORTED_FORMAT = 6;
+    public static final int TRANSFORM_ERROR = 7;
     public static final int UNEXPECTED_ERROR = 99;
 
     private ExitCodes() {

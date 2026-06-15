@@ -1,0 +1,8 @@
+{
+  "transforms": [
+    { "type": "rename", "from": "staff_id", "to": "staffId" },
+    { "type": "addStatic", "fields": { "source": "student-system" } }
+  ],
+  "input": { "staff_id": 123, "first_name": "Jane" },
+  "expected": { "staffId": 123, "source": "student-system" }
+}

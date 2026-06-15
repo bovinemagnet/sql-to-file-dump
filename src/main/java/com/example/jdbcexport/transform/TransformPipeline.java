@@ -1,0 +1,155 @@
+package com.example.jdbcexport.transform;
+
+import com.example.jdbcexport.error.ExitCodes;
+import com.example.jdbcexport.error.ExportException;
+import com.example.jdbcexport.jdbc.ResultSetColumn;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * An ordered chain of {@link OutboundTransformer}s applied to outbound rows.
+ *
+ * <p>When empty the pipeline is a pure pass-through and the export uses its fast path without ever
+ * materialising a {@link Row}. When non-empty, {@link #outputSchema} is resolved once up front
+ * (failing fast on bad column references) and {@link #transform} runs per row, recording
+ * {@link TransformMetrics}. Each transformer returns a {@link TransformResult}; a {@code Fail} is
+ * handled per the configured {@link ErrorStrategy}.
+ *
+ * <p>{@code transform(Row)} is the stable boundary used by the exporter, daemon and test harness —
+ * the {@link TransformResult}/{@link TransformContext} machinery is internal to this class.
+ */
+public final class TransformPipeline {
+
+    /** A named transform step; the name (config {@code name} or the type) labels metrics and errors. */
+    public record Step(String name, OutboundTransformer transformer) {
+    }
+
+    private static final String PIPELINE_NAME = "default";
+
+    private final List<Step> steps;
+    private final ErrorStrategy errorStrategy;
+    private final TransformMetrics metrics = new TransformMetrics();
+    private long rowNumber;
+
+    /** Convenience: name each step by its transformer name, fail-fast on error. */
+    public TransformPipeline(List<OutboundTransformer> transformers) {
+        this(transformers.stream().map(t -> new Step(t.name(), t)).toList(), ErrorStrategy.FAIL);
+    }
+
+    public TransformPipeline(List<Step> steps, ErrorStrategy errorStrategy) {
+        this.steps = List.copyOf(steps);
+        this.errorStrategy = errorStrategy;
+        for (Step step : this.steps) {
+            metrics.registerStep(step.name(), step.transformer().name());
+        }
+    }
+
+    public static TransformPipeline empty() {
+        return new TransformPipeline(List.<Step>of(), ErrorStrategy.FAIL);
+    }
+
+    public boolean isEmpty() {
+        return steps.isEmpty();
+    }
+
+    public ErrorStrategy errorStrategy() {
+        return errorStrategy;
+    }
+
+    public TransformMetrics metrics() {
+        return metrics;
+    }
+
+    /** Output columns this pipeline marks sensitive (e.g. masked), for redaction. */
+    public Set<String> sensitiveColumns() {
+        Set<String> sensitive = new LinkedHashSet<>();
+        for (Step step : steps) {
+            if (step.transformer() instanceof SensitiveColumns sc) {
+                sensitive.addAll(sc.sensitiveColumns());
+            }
+        }
+        return sensitive;
+    }
+
+    /**
+     * Resolve the output columns by threading the input columns through each transformer's schema
+     * step in order. Called once before any rows are read; column-reference errors surface here.
+     */
+    public List<ResultSetColumn> outputSchema(List<ResultSetColumn> inputColumns) {
+        List<ResultSetColumn> columns = inputColumns;
+        for (Step step : steps) {
+            columns = List.copyOf(step.transformer().transformSchema(columns));
+            if (columns.isEmpty()) {
+                throw new ExportException(ExitCodes.TRANSFORM_ERROR,
+                    "Transform \"" + step.name() + "\" removed all columns; nothing would be exported.");
+            }
+        }
+        return columns;
+    }
+
+    /**
+     * Apply every transformer to {@code row} in order. Returns the reshaped row, or {@code null} if
+     * a transformer dropped it (or the row was skipped under {@link ErrorStrategy#SKIP_ROW}).
+     */
+    public Row transform(Row row) {
+        metrics.recordRowIn();
+        rowNumber++;
+        Row original = errorStrategy == ErrorStrategy.KEEP_ORIGINAL ? row.copy() : null;
+        Row current = row;
+        TransformContext context = new TransformContext(rowNumber, PIPELINE_NAME);
+
+        for (int i = 0; i < steps.size(); i++) {
+            Step step = steps.get(i);
+            long start = System.nanoTime();
+            TransformResult result;
+            try {
+                result = step.transformer().transform(new TransformInput(current), context);
+            } catch (RuntimeException e) {
+                // A transformer that throws rather than returning Fail is still handled gracefully.
+                result = TransformResult.fail(step.name() + " threw", e);
+            } finally {
+                metrics.recordStep(i, System.nanoTime() - start);
+            }
+
+            if (result instanceof TransformResult.Keep keep) {
+                current = keep.row();
+            } else if (result instanceof TransformResult.Drop) {
+                metrics.recordRowDropped(false);
+                return null;
+            } else if (result instanceof TransformResult.Fail fail) {
+                metrics.recordStepFailure(i);
+                Row handled = handleFailure(step, fail, original);
+                if (handled == null) {
+                    metrics.recordRowDropped(true);
+                    return null;
+                }
+                metrics.recordRowOut();
+                return handled;
+            }
+        }
+        metrics.recordRowOut();
+        return current;
+    }
+
+    /** Returns the row to emit, {@code null} to drop, or throws to abort — per the strategy. */
+    private Row handleFailure(Step step, TransformResult.Fail fail, Row original) {
+        switch (errorStrategy) {
+            case SKIP_ROW:
+                return null;
+            case KEEP_ORIGINAL:
+                return original;
+            case FAIL:
+            default:
+                if (fail.cause() instanceof ExportException ee) {
+                    throw ee;
+                }
+                // Only include the message for value-free built-in failures (no caught cause), so an
+                // arbitrary exception's message can never leak row values.
+                String detail = fail.cause() == null && fail.message() != null ? ": " + fail.message() : "";
+                throw new ExportException(ExitCodes.TRANSFORM_ERROR,
+                    "Transform \"" + step.name() + "\" failed at row " + rowNumber + detail + ".");
+        }
+    }
+}

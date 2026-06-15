@@ -3,6 +3,7 @@
 const VIEWS = {
   dashboard:   { top: dashboardTop,   body: dashboardView },
   live:        { top: liverunTop,     body: liverunView },
+  transforms:  { top: transformsTop,  body: transformsView },
   schedules:   { top: schedulesTop,   body: schedulesView },
   connections: { top: connectionsTop, body: connectionsView },
 };
@@ -19,6 +20,7 @@ const STATE = {
   editingConn: null, // id of the connection currently being edited, or null
   schedules: [],     // schedules from /api/schedules
   editingSchedule: null, // id of the schedule currently being edited, or null
+  transformations: [], // per-job transform summaries from /api/transformations
   series: {},        // jobId → normalised throughput samples for the chart
   log: {},           // jobId → synthesised batch log lines
   lastRows: {},      // jobId → { rows, t } for instantaneous throughput
@@ -86,6 +88,7 @@ function setView(key) {
   if (key === 'dashboard') { wireDashboard(); applyJobFilter(); }
   if (key === 'connections') loadConnections();
   if (key === 'schedules') loadSchedules();
+  if (key === 'transforms') loadTransformations();
   try { localStorage.setItem(LS.view, key); } catch (e) {}
 }
 
@@ -229,6 +232,8 @@ async function refreshData() {
   } else if (CURRENT === 'live') {
     document.getElementById('topslot').innerHTML = liverunTop();
     document.getElementById('bodyslot').innerHTML = liverunView();
+  } else if (CURRENT === 'transforms') {
+    loadTransformations();
   }
 }
 

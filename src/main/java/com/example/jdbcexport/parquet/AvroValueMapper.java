@@ -16,6 +16,26 @@ public final class AvroValueMapper {
     private AvroValueMapper() {
     }
 
+    /**
+     * Map a canonical transform-path value (see {@link com.example.jdbcexport.jdbc.ValueKind}) to its
+     * Avro representation for the schema built by
+     * {@link AvroSchemaFactory#buildCanonicalSchema(java.util.List)}.
+     */
+    public static Object mapCanonical(Object value, com.example.jdbcexport.jdbc.ValueKind kind) {
+        if (value == null) {
+            return null;
+        }
+        return switch (kind) {
+            case BOOLEAN -> value instanceof Boolean b ? b : Boolean.parseBoolean(value.toString());
+            case INT -> ((Number) value).intValue();
+            case LONG -> ((Number) value).longValue();
+            case FLOAT -> ((Number) value).floatValue();
+            case DOUBLE -> ((Number) value).doubleValue();
+            case DECIMAL -> new Utf8(value instanceof BigDecimal bd ? bd.toPlainString() : value.toString());
+            case STRING -> new Utf8(value.toString());
+        };
+    }
+
     public static Object readValue(ResultSet rs, ResultSetColumn column) throws SQLException {
         int jdbcType = column.jdbcType();
         int index = column.index();

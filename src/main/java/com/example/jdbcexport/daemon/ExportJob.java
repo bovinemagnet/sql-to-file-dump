@@ -1,6 +1,7 @@
 package com.example.jdbcexport.daemon;
 
 import com.example.jdbcexport.cli.OutputFormat;
+import com.example.jdbcexport.transform.TransformMetrics;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,6 +37,11 @@ public final class ExportJob {
     private volatile String serverInfo;
     private volatile String error;
 
+    private final boolean transformsEnabled;
+    private final String errorStrategy;
+    private volatile TransformMetrics.Snapshot transformMetrics;
+    private volatile long slowTransformThresholdMs = 50;
+
     ExportJob(String id, Instant submittedAt, ExportJobRequest request, int fetchSize) {
         this.id = id;
         this.submittedAt = submittedAt;
@@ -47,6 +53,8 @@ public final class ExportJob {
         this.driver = driverOf(request.url());
         this.fetchSize = fetchSize;
         this.compression = request.parquetCompression();
+        this.transformsEnabled = request.hasTransforms();
+        this.errorStrategy = request.errorStrategy();
     }
 
     /** Best-effort driver family from a JDBC URL (jdbc:<driver>:...), for display only. */
@@ -82,6 +90,27 @@ public final class ExportJob {
         status = Status.FAILED;
         completedAt = now;
         error = message;
+    }
+
+    void recordTransformMetrics(TransformMetrics.Snapshot snapshot, long slowThresholdMs) {
+        this.transformMetrics = snapshot;
+        this.slowTransformThresholdMs = slowThresholdMs;
+    }
+
+    public boolean isTransformsEnabled() {
+        return transformsEnabled;
+    }
+
+    public String getErrorStrategy() {
+        return errorStrategy;
+    }
+
+    public TransformMetrics.Snapshot getTransformMetrics() {
+        return transformMetrics;
+    }
+
+    public long getSlowTransformThresholdMs() {
+        return slowTransformThresholdMs;
     }
 
     public String getId() {

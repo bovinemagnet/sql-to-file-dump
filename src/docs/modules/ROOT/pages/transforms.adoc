@@ -1,0 +1,426 @@
+= Outbound transforms
+:description: Reshape, redact, and enrich rows on the way out using jdbc-export's built-in transform pipeline.
+
+== Overview
+
+The CLI has an optional outbound transformation layer — a lightweight ETL step that reshapes rows after the SQL query runs and before they are serialised. When no transforms are configured the export is an unchanged, zero-overhead pass-through.
+
+== Configuring transforms
+
+Transforms can be specified in two ways, which can be combined. File specs run first in file order, then inline specs in argument order.
+
+*1. Inline `--transform` option* — repeatable. Each value is a shorthand string:
+
+* `rename:old=new`
+* `drop:a,b,c`
+* `keep:a,b`
+* `addStatic:source=student-system,version=1`
+* `default:col=value`
+* `mask:email` or `mask:email=###`
+* `map:status=A>Active,C>Closed`
+* `+template:full={first} {last}+`
+* `+expression:displayName=lastName + ', ' + firstName+`
+
+*2. `--transforms-file <path>`* — pointing at a JSON document. The JSON is either a top-level array, or an object with a `"transforms"` array. Each element is an object with a `"type"` key plus that transform's config keys. A sample is available at `examples/transforms.sample.json` in the repository.
+
+[source,bash]
+----
+jdbc-export \
+  --url jdbc:postgresql://localhost:5432/crm \
+  --user analyst \
+  --password-env DB_PASS \
+  --sql "SELECT id, status, email, first_name, last_name FROM contacts" \
+  --format csv \
+  --output contacts.csv \
+  --transforms-file examples/transforms.sample.json
+----
+
+== Built-in transforms
+
+=== rename
+
+Renames a column in the output.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`from`
+|The existing column name.
+
+|`to`
+|The new column name.
+|===
+
+Fails if `from` does not exist or `to` would collide with an existing column name.
+
+=== drop
+
+Removes one or more columns from the output.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`columns`
+|JSON array or comma-separated string of column names to remove.
+|===
+
+Fails if a named column does not exist.
+
+=== keep
+
+Keeps only the listed columns, in the listed order; all others are removed.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`columns`
+|JSON array or comma-separated string of column names to retain.
+|===
+
+=== addStatic
+
+Adds one or more constant string-valued columns to every row.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`fields`
+|Object mapping new column names to their constant string values.
+|===
+
+Fails if any name collides with an existing column.
+
+=== default
+
+Substitutes a literal value for SQL `NULL`s in a column, keeping the column's native type.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`column`
+|The column name.
+
+|`value`
+|The literal value to use in place of `NULL`.
+|===
+
+The literal is validated against the column type at startup — for example, `value` must parse as an integer for an `INTEGER` column.
+
+=== map
+
+Translates values via a lookup table (for example, status codes to labels). The column becomes string-typed on output.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`column`
+|The column name.
+
+|`mapping`
+|Object mapping source values to output strings.
+
+|`unmatched` (optional)
+|One of `keep` (default), `default`, or `fail`.
+
+|`default` (required when `unmatched` is `default`)
+|Value to use when no mapping matches.
+|===
+
+=== mask
+
+Replaces every non-null value in one or more columns with a fixed token (for redaction). Null values remain null. Masked columns are reported as sensitive so the dashboard never displays their values.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`column`
+|A single column name.
+
+|`columns`
+|Alternatively, a JSON array or comma-separated list of column names.
+
+|`mask` (optional)
+|Replacement token; defaults to `***`.
+|===
+
+=== template
+
+Adds a computed string column built from a template containing `+{column}+` placeholders, for example `+"{first} {last}"+`. Placeholder columns are validated at startup; a null value in a placeholder column renders as an empty string.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`name`
+|The name of the new column to add.
+
+|`template`
+|The template string, with `+{column}+` placeholder references.
+|===
+
+NOTE: `template` is plain placeholder substitution. For computed fields that need comparisons or conditionals, use `expression` below.
+
+=== expression
+
+Adds a computed string column from a small, sandboxed expression over the row's fields.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`outputField`
+|The name of the new column to add.
+
+|`expression`
+|The expression to evaluate, referencing field names.
+|===
+
+For example, `+lastName + ', ' + firstName+` or `+activeFlag == 'Y' ? 'ACTIVE' : 'INACTIVE'+`. The result is stored string-typed.
+
+Expressions are built on Apache Commons JEXL with a restricted feature set and `RESTRICTED` permissions. They are compiled once at startup — invalid syntax fails fast. The engine rejects, at parse time, method calls, object construction (`new`), loops, lambdas, side-effects, reflection, class loading, and IO/process/network access. This is for lightweight computed fields only, not scripting. A runtime evaluation error never exposes field values and flows through the configured xref:#error-strategies[error strategy].
+
+== Transform ordering and schema
+
+Transforms run in declared order; each transform sees the previous transform's output columns and values. The output schema is resolved once, up front, before any rows are read, so column-reference errors fail fast rather than mid-export.
+
+=== Transform names
+
+Each transform in a transforms file may carry an optional `name`, used in metrics and error messages; if omitted it falls back to the transform's type. Explicit names must be unique within a pipeline (duplicates fail fast). Repeated unnamed transforms of the same type are allowed.
+
+[#error-strategies]
+== Error handling strategies
+
+When a transform throws while processing a row, the pipeline follows a configurable strategy. Set it with the top-level `errorStrategy` key in a transforms file, or the `--on-transform-error` CLI option (which overrides the file). The default is `fail`.
+
+[cols="1,3",options="header"]
+|===
+|Strategy |Behaviour
+
+|`fail`
+|Abort the export (default). The safest option — avoids silently corrupting output.
+
+|`skipRow`
+|Drop the offending row and continue. The row is counted as dropped with reason `error`.
+
+|`keepOriginal`
+|Emit the row exactly as it entered the pipeline (before any transform mutated it) and continue.
+|===
+
+Error messages include the transform name and row number but never row values. A fail-fast abort uses exit code `7`.
+
+[source,bash]
+----
+jdbc-export ... --transforms-file transforms.json --on-transform-error skipRow
+----
+
+[source,json]
+----
+{
+  "errorStrategy": "skipRow",
+  "transforms": [
+    { "type": "rename", "name": "normalise-id", "from": "staff_id", "to": "staffId" }
+  ]
+}
+----
+
+== Output contract validation
+
+A transforms file may declare a `validateOutput` contract, checked against the resolved post-transform schema *before any rows are read*.
+
+[cols="1,3",options="header"]
+|===
+|Key |Description
+
+|`enabled`
+|Defaults to true when the object is present; set to `false` to disable.
+
+|`requiredFields`
+|Array of column names that must be present in the output.
+
+|`optionalFields`
+|Array of additional column names allowed when `failOnUnknownFields` is set.
+
+|`failOnUnknownFields`
+|When true, every output column must be a required or optional field.
+|===
+
+Violations name the offending field but never row values, and use exit code `7`.
+
+[source,json]
+----
+{
+  "validateOutput": {
+    "enabled": true,
+    "requiredFields": ["staffId", "displayName"],
+    "failOnUnknownFields": false
+  },
+  "transforms": [ ... ]
+}
+----
+
+== Canonical values in transform mode
+
+When a transform pipeline is active, values are normalised to a canonical representation before transforms run: dates, times, and timestamps become ISO-8601 strings; binary columns become Base64 strings; decimals become `BigDecimal`. This is the same representation the JSON output already uses, so JSON/NDJSON/CSV/TSV outputs are unaffected.
+
+WARNING: In transform mode, *Parquet* output stores dates, times, timestamps, and binary columns as strings rather than native Parquet logical types. If you need native Parquet types, run the export without transforms and apply any reshaping in your downstream tool.
+
+The no-transform fast path is unaffected and keeps native Parquet types.
+
+== Metrics
+
+When transforms are active, a one-line summary is printed to standard output after the export finishes, showing rows in / out / dropped, per-transform total time in milliseconds, and a failure count.
+
+Metrics are also emitted to Micrometer (scrapeable at `/q/metrics` in daemon mode):
+
+[cols="2,1",options="header"]
+|===
+|Metric |Type
+
+|`sql_transformer_transform_pipeline_duration_seconds` (tags: pipeline, source, output, status)
+|timer
+
+|`sql_transformer_transform_duration_seconds` (tags: pipeline, transform, type, status)
+|timer (per step)
+
+|`sql_transformer_transform_rows_total` (tags: pipeline, status)
+|counter
+
+|`sql_transformer_transform_rows_dropped_total` (tags: pipeline, reason)
+|counter
+
+|`sql_transformer_transform_errors_total` (tags: pipeline, transform, type, error_class)
+|counter
+|===
+
+The `reason` tag on dropped rows is `filtered` (a transform returned no row) or `error` (skipped under `skipRow`).
+
+Metrics are controlled by configuration, with defaults:
+
+[cols="2,1,3",options="header"]
+|===
+|Key |Default |Description
+
+|`transform.metrics.enabled` |`true` |Emit transform metrics at all.
+|`transform.metrics.perTransform` |`true` |Emit a per-step timer, not just the pipeline total.
+|`transform.metrics.slowTransformThresholdMs` |`50` |Steps reaching this total time are logged and flagged as slow.
+|===
+
+The no-transform fast path emits no per-row metrics. Labels are bounded and never contain row values, SQL text, or identifiers.
+
+== Errors and exit codes
+
+* Exit code `7` is the transform error code, consistent with the full list in xref:cli-reference.adoc[CLI reference].
+* Invalid configuration fails fast before any rows are processed where possible — syntax errors at parse time, column-reference errors at schema-resolution time.
+* A transform that throws on a row aborts the export; the error message never includes row data.
+* No sensitive row data is logged or surfaced in metrics or error messages.
+
+== Worked examples
+
+=== 1. Inline transforms
+
+[source,bash]
+----
+jdbc-export \
+  --url jdbc:postgresql://localhost:5432/crm \
+  --user analyst \
+  --password-env DB_PASS \
+  --sql "SELECT id, room_code, email, first_name, last_name FROM contacts" \
+  --format ndjson \
+  --output contacts.ndjson \
+  --transform rename:room_code=room \
+  --transform mask:email \
+  --transform template:full_name={first_name} {last_name}
+----
+
+=== 2. File-based transforms
+
+[source,bash]
+----
+jdbc-export \
+  --url jdbc:postgresql://localhost:5432/crm \
+  --user analyst \
+  --password-env DB_PASS \
+  --sql "SELECT id, status, email, first_name, last_name FROM contacts" \
+  --format csv \
+  --output contacts.csv \
+  --transforms-file examples/transforms.sample.json
+----
+
+== The dashboard Transformations tab
+
+In daemon mode the Sluice console has a *Transformations* tab (left rail, under Operate). It lists each export that ran with transforms and shows, per job: status, output, error strategy, rows in / out / dropped, total pipeline duration, and a per-step table (order, transform name, type, rows, errors, duration, average per row) with a *slow* badge for steps over the configured threshold.
+
+Exports with no transforms run as a pass-through and are not listed — an empty state explains this. Only counts and timings are shown, never row values; the data comes from `GET /api/transformations`. The Dashboard submit form gained a *Transforms* textarea (one inline spec per line) and an *On transform error* selector.
+
+== Testing transforms
+
+A `TransformTestHarness` ships in the main artifact (`com.example.jdbcexport.transform.testing`), so plugin authors can test a transform or pipeline without a database or the whole application:
+
+[source,java]
+----
+TransformTestHarness.forTransform(new MyTransformer())
+    .withInput(Map.of("first_name", "Jane", "last_name", "Citizen"))
+    .expectOutput(Map.of("displayName", "Citizen, Jane"));
+----
+
+It also offers `.expectDropped()`, `.expectFailure()`, and `.withSchema(...)` to override the inferred (all-string) input schema. For data-driven tests, `TransformFixtureRunner.run(path)` executes a JSON fixture of the form `{ "transforms": [...], "input": {...}, "expected": {...} }` (or `"dropped": true`). See `examples/transforms.sample.json` for a configuration reference.
+
+== Performance
+
+JMH benchmarks live in `src/jmh/java` and run with `gradle21w jmh`. They measure per-row transform overhead across narrow (5-field) and wide (100-field) rows for the no-transform baseline, `rename`, `rename`+`drop`+`map`, and `mask`.
+
+When no transforms are configured the export takes a fast pass-through path and never builds a pipeline or materialises a row map, so existing exports are unaffected.
+
+== Extending with Java
+
+Advanced transforms are written in Java by implementing `OutboundTransformer` and contributing it through a `ServiceLoader` SPI.
+
+An `OutboundTransformer` has four parts:
+
+* `name()` — the type identity, used in configuration, the registry, metrics and errors.
+* `capabilities()` — `TransformCapabilities` metadata (schema-changing / row-level / deterministic); defaults to a pure per-row transform that does not change the column set.
+* `transformSchema(columns)` — compute the output columns; called once up front so column-reference errors fail fast.
+* `transform(input, context)` — reshape a single row, returning a `TransformResult`: `Keep` (emit, optionally reshaping the row), `Drop` (discard, with a reason for metrics) or `Fail` (the pipeline applies its error strategy). This replaces the older `null`-means-drop / throw-means-fail conventions.
+
+[source,java]
+----
+public final class StaffDisplayTransformer implements OutboundTransformer {
+
+    @Override
+    public String name() {
+        return "staff-display";
+    }
+
+    @Override
+    public TransformCapabilities capabilities() {
+        return TransformCapabilities.columnChanging();
+    }
+
+    @Override
+    public List<ResultSetColumn> transformSchema(List<ResultSetColumn> columns) {
+        List<ResultSetColumn> out = new ArrayList<>(columns);
+        out.add(new ResultSetColumn(-1, "displayName", "displayName", Types.VARCHAR, "VARCHAR", 0, 0, true));
+        return out;
+    }
+
+    @Override
+    public TransformResult transform(TransformInput input, TransformContext context) {
+        Row row = input.row();
+        row.put("displayName", row.get("last_name") + ", " + row.get("first_name"));
+        return TransformResult.keep(row);
+    }
+}
+----
+
+A matching `com.example.jdbcexport.transform.TransformProvider` returns a `type()` string and builds the `OutboundTransformer` from a `TransformSpec`. Register it in `META-INF/services/com.example.jdbcexport.transform.TransformProvider`; the registry merges built-in and external providers at startup and a duplicate type name fails fast. Test it without a database using the `TransformTestHarness` described under <<Testing transforms>>.
+
+NOTE: This is a compile-time SPI extension only. No untrusted code is evaluated at run time.
+
+For the full list of CLI options see xref:cli-reference.adoc[CLI reference].

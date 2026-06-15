@@ -31,6 +31,53 @@ class ExportJobServiceTest {
         return new ExportJobRequest("jdbc:duckdb:", "ignored", null, null, sql, OutputFormat.CSV, output.toString(), false);
     }
 
+    private ExportJobRequest requestWithTransforms(String sql, Path output, List<String> transforms) {
+        return new ExportJobRequest("jdbc:duckdb:", "ignored", null, null, sql, OutputFormat.CSV, output.toString(),
+            false, "SNAPPY", transforms, null);
+    }
+
+    @Test
+    void appliesTransformsAndCapturesTransformMetrics(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("transformed.csv");
+        ExportJob job = service.submit(requestWithTransforms(
+            "SELECT 1 AS a, 2 AS b", output, List.of("rename:a=id", "addStatic:source=sys")));
+
+        awaitFinished(job);
+
+        assertThat(job.getStatus()).isEqualTo(ExportJob.Status.COMPLETED);
+        assertThat(job.isTransformsEnabled()).isTrue();
+        assertThat(Files.readAllLines(output)).containsExactly("id,b,source", "1,2,sys");
+
+        var snapshot = job.getTransformMetrics();
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.rowsOut()).isEqualTo(1);
+        assertThat(snapshot.steps()).extracting(s -> s.type()).containsExactly("rename", "addStatic");
+    }
+
+    @Test
+    void transformationViewExposesPipelineForDashboard(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("view.csv");
+        ExportJob job = service.submit(requestWithTransforms(
+            "SELECT 'a@b.com' AS email, 5 AS n", output, List.of("mask:email")));
+        awaitFinished(job);
+
+        DashboardApiResource.TransformationView view = DashboardApiResource.TransformationView.from(job);
+        assertThat(view.jobId()).isEqualTo(job.getId());
+        assertThat(view.rowsOut()).isEqualTo(1);
+        assertThat(view.steps()).singleElement()
+            .satisfies(step -> assertThat(step.type()).isEqualTo("mask"));
+        // Masked output must not leak the original value.
+        assertThat(Files.readString(output)).doesNotContain("a@b.com").contains("***");
+    }
+
+    @Test
+    void passThroughJobIsNotTransformsEnabled(@TempDir Path tempDir) throws Exception {
+        ExportJob job = service.submit(request("SELECT 1 AS a", tempDir.resolve("plain.csv")));
+        awaitFinished(job);
+        assertThat(job.isTransformsEnabled()).isFalse();
+        assertThat(job.getTransformMetrics()).isNull();
+    }
+
     @Test
     void runsSubmittedJobToCompletion(@TempDir Path tempDir) throws Exception {
         Path output = tempDir.resolve("out.csv");

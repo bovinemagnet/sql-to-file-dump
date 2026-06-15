@@ -9,15 +9,26 @@ import com.example.jdbcexport.jdbc.PasswordResolver;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.example.jdbcexport.jdbc.ResultSetSchemaReader;
 import com.example.jdbcexport.jdbc.SqlSafetyValidator;
+import com.example.jdbcexport.transform.ErrorStrategy;
+import com.example.jdbcexport.transform.TransformConfig;
+import com.example.jdbcexport.transform.TransformConfigLoader;
+import com.example.jdbcexport.transform.TransformMetrics;
+import com.example.jdbcexport.transform.TransformPipeline;
+import com.example.jdbcexport.transform.TransformRegistry;
+import com.example.jdbcexport.transform.metrics.TransformMetricsPublisher;
+import com.example.jdbcexport.transform.metrics.TransformMetricsSettings;
 import com.example.jdbcexport.writer.RowWriter;
 import com.example.jdbcexport.writer.RowWriterFactory;
+import io.micrometer.core.instrument.Metrics;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -123,22 +134,46 @@ public class ExportJobService {
 
     private void run(ExportJob job, ExportJobRequest request, String resolvedPassword) {
         job.markRunning(Instant.now());
+        TransformPipeline pipeline = null;
         try (Connection connection = JdbcConnectionFactory.connect(request.url(), request.user(), resolvedPassword)) {
             List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, request.sql(), DEFAULT_FETCH_SIZE);
-            job.recordSchema(columns.size(), describeServer(connection));
+
+            ErrorStrategy strategy = request.errorStrategy() == null ? null : ErrorStrategy.fromConfig(request.errorStrategy());
+            TransformConfig transformConfig = TransformConfigLoader.loadConfig(null, request.transforms(), strategy);
+            pipeline = new TransformRegistry().build(transformConfig);
+            boolean transforming = !pipeline.isEmpty();
+            List<ResultSetColumn> outputColumns = pipeline.outputSchema(columns);
+            if (transformConfig.outputContract() != null) {
+                transformConfig.outputContract().validate(outputColumns);
+            }
+            job.recordSchema(outputColumns.size(), describeServer(connection));
+
             ExportOptions options = new ExportOptions(
                 request.url(), request.user(), resolvedPassword, request.sql(), null,
                 request.format(), request.output(), DEFAULT_FETCH_SIZE, null, null,
                 request.overwrite(), false, false, false, false, true, "", request.parquetCompression());
-            try (RowWriter writer = new RowWriterFactory().create(options, columns)) {
+            try (RowWriter writer = new RowWriterFactory().create(options, outputColumns, transforming)) {
                 JdbcExporter.ExportResult result =
                     new JdbcExporter().export(connection, request.sql(), DEFAULT_FETCH_SIZE, null, writer,
-                        job::recordProgress);
+                        job::recordProgress, columns, pipeline);
                 job.markCompleted(Instant.now(), result.rowCount());
             }
         } catch (Exception e) {
             job.markFailed(Instant.now(), e.getMessage());
+        } finally {
+            if (pipeline != null && !pipeline.isEmpty()) {
+                recordTransformMetrics(job, request, pipeline);
+            }
         }
+    }
+
+    private void recordTransformMetrics(ExportJob job, ExportJobRequest request, TransformPipeline pipeline) {
+        TransformMetrics.Snapshot snapshot = pipeline.metrics().snapshot();
+        TransformMetricsSettings settings = TransformMetricsSettings.fromConfig();
+        job.recordTransformMetrics(snapshot, settings.slowTransformThresholdMs());
+        String output = request.format() == null ? "unknown" : request.format().name().toLowerCase(Locale.ROOT);
+        TransformMetricsPublisher.publish(Metrics.globalRegistry, "daemon", "daemon", output,
+            snapshot, Duration.ofMillis(job.getElapsedMillis()), settings);
     }
 
     private static String describeServer(Connection connection) {

@@ -14,6 +14,12 @@ const API = {
     return r.json();
   },
 
+  async transformations() {
+    const r = await fetch('/api/transformations', { headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error('GET /api/transformations → ' + r.status);
+    return r.json();
+  },
+
   submit(fields) { return API._send('POST', '/api/jobs', fields); },
   describe(fields) { return API._send('POST', '/api/describe', fields); },
 

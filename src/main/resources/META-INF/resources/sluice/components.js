@@ -71,6 +71,7 @@ const NAV = [
   ['Operate', [
     ['dashboard', 'Dashboard', 'dashboard'],
     ['monitoring', 'Live Run', 'live'],
+    ['transform', 'Transformations', 'transforms'],
   ]],
   ['Automate', [
     ['schedule', 'Schedules', 'schedules'],

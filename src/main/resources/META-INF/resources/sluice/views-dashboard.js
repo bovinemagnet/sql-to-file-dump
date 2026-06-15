@@ -155,6 +155,16 @@ function dashFormHTML() {
           <input class="inp" name="output" placeholder="exports/bookings.parquet">
         </div>
       </div>
+      <div class="oform__grid oform__grid--3">
+        <div class="field" style="grid-column:1 / span 2">
+          <label>Transforms <span class="opt">— optional, one per line · e.g. rename:old=new, mask:email, map:s=A&gt;Active</span></label>
+          <textarea class="ta" name="transforms" spellcheck="false" placeholder="rename:room_code=room&#10;mask:email"></textarea>
+        </div>
+        <div class="field">
+          <label>On transform error</label>
+          <select class="sel" name="errorStrategy"><option value="fail">fail</option><option value="skipRow">skipRow</option><option value="keepOriginal">keepOriginal</option></select>
+        </div>
+      </div>
       <div class="actions">
         <label class="ocheck"><span class="sw sw--on" id="ovToggle" data-toggle></span> Overwrite if exists</label>
         <div class="actions__sp"></div>
@@ -224,6 +234,8 @@ function dashFormValues() {
     format: fmt ? fmt.dataset.val : 'csv',
     output: root.querySelector('[name=output]').value.trim(),
     compression: root.querySelector('[name=compression]').value,
+    transforms: root.querySelector('[name=transforms]').value,
+    errorStrategy: root.querySelector('[name=errorStrategy]').value,
     connectionId: root.dataset.connId || '',
     overwrite: ov && ov.classList.contains('sw--on') ? 'true' : 'false',
   };

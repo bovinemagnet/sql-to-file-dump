@@ -9,6 +9,12 @@
 - Read-only SQL validation (`SELECT` / `WITH`)
 - Streaming writers for JSON, NDJSON, CSV, TSV, and Parquet
 - Optional metadata sidecar JSON
+- Optional outbound transform pipeline via `--transform`/`--transforms-file` — a
+  zero-overhead pass-through when unconfigured. Built-ins: rename, drop, keep,
+  addStatic, default, map, mask, computed-field templates, and sandboxed
+  expressions; plus configurable error strategies (fail/skipRow/keepOriginal),
+  output-contract validation, Micrometer metrics, a dashboard Transformations
+  tab, and a Java SPI for advanced transforms
 - Schema inspection with `--describe`
 - DuckDB and PostgreSQL integration coverage in tests
 - `daemon` mode serving **Sluice**, a browser ops console for submitting and

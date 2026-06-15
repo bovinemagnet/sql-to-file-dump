@@ -1,0 +1,18 @@
+{
+  "errorStrategy": "fail",
+  "validateOutput": {
+    "enabled": true,
+    "requiredFields": ["room", "summary"],
+    "failOnUnknownFields": false
+  },
+  "transforms": [
+    { "type": "rename", "from": "room_code", "to": "room" },
+    { "type": "drop", "columns": ["internal_notes"] },
+    { "type": "addStatic", "fields": { "source": "student-system", "version": "1" } },
+    { "type": "default", "column": "attendees", "value": "0" },
+    { "type": "map", "column": "status", "mapping": { "A": "Active", "C": "Closed" }, "unmatched": "default", "default": "Unknown" },
+    { "type": "mask", "columns": ["email", "dob"], "mask": "***" },
+    { "type": "template", "name": "summary", "template": "{room}: {attendees} attendees" },
+    { "type": "expression", "outputField": "displayStatus", "expression": "status == 'Active' ? 'OPEN' : 'CLOSED'" }
+  ]
+}

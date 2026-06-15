@@ -3,6 +3,7 @@
 * xref:cli-reference.adoc[CLI reference]
 * xref:daemon-dashboard.adoc[Daemon and dashboard]
 * xref:configuration.adoc[Configuration]
+* xref:transforms.adoc[Outbound transforms]
 * xref:connections.adoc[Saved connections]
 * xref:schedules.adoc[Schedules]
 * xref:rest-api.adoc[REST API]

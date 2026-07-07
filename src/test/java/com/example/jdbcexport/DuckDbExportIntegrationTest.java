@@ -87,6 +87,25 @@ class DuckDbExportIntegrationTest {
         }
     }
 
+    @Test
+    void overwritesExistingParquetFile(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("out.parquet");
+        // First export writes all three rows.
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT booking_id, attendees FROM bookings ORDER BY booking_id");
+        assertThat(output).exists();
+
+        // A second export to the same path must overwrite (not fail with FileAlreadyExistsException)
+        // and truncate to the new, smaller result — matching how the CSV/JSON writers behave.
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT booking_id, attendees FROM bookings WHERE booking_id = 'B001'");
+
+        try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = verifyConnection.createStatement();
+             var resultSet = statement.executeQuery("SELECT COUNT(*) FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+            resultSet.next();
+            assertThat(resultSet.getLong(1)).isEqualTo(1L);
+        }
+    }
+
     private void exportToFormat(Path output, OutputFormat format, String sql) throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
             setupTable(connection);

@@ -2,9 +2,12 @@ package com.example.jdbcexport;
 
 import com.example.jdbcexport.cli.ExportOptions;
 import com.example.jdbcexport.cli.OutputFormat;
+import com.example.jdbcexport.error.ExportException;
 import com.example.jdbcexport.jdbc.JdbcExporter;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.example.jdbcexport.jdbc.ResultSetSchemaReader;
+import com.example.jdbcexport.transform.ErrorStrategy;
+import com.example.jdbcexport.transform.TransformConfig;
 import com.example.jdbcexport.transform.TransformPipeline;
 import com.example.jdbcexport.transform.TransformRegistry;
 import com.example.jdbcexport.transform.TransformSpec;
@@ -23,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DuckDbTransformIntegrationTest {
 
@@ -95,6 +99,27 @@ class DuckDbTransformIntegrationTest {
         exportFastPath(direct, OutputFormat.CSV, sql);
 
         assertThat(Files.readAllLines(withEmpty)).isEqualTo(Files.readAllLines(direct));
+    }
+
+    @Test
+    void maskWithKeepOriginalIsRejectedBeforeAnyRowsAreWritten(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("out.csv");
+        // A masking pipeline under keepOriginal: on a step failure the pre-mask snapshot would leak the
+        // unmasked value, so the pipeline must be rejected up front rather than exporting anything.
+        TransformPipeline pipeline = new TransformRegistry().build(new TransformConfig(
+            List.of(new TransformSpec("mask", Map.of("column", "booking_id"))),
+            ErrorStrategy.KEEP_ORIGINAL, null));
+        String sql = "SELECT booking_id, room_code FROM bookings ORDER BY booking_id";
+
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
+            setupTable(connection);
+            List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, sql, 1000);
+            assertThatThrownBy(() -> pipeline.outputSchema(columns))
+                .isInstanceOf(ExportException.class)
+                .hasMessageContaining("keepOriginal")
+                .hasMessageContaining("booking_id");
+        }
+        assertThat(Files.exists(output)).isFalse();
     }
 
     private static TransformPipeline pipeline(TransformSpec... specs) {

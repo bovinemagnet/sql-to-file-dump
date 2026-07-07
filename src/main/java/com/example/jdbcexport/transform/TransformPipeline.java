@@ -4,6 +4,7 @@ import com.example.jdbcexport.error.ExitCodes;
 import com.example.jdbcexport.error.ExportException;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -86,7 +87,49 @@ public final class TransformPipeline {
                     "Transform \"" + step.name() + "\" removed all columns; nothing would be exported.");
             }
         }
+        validateKeepOriginalIsCoherent(inputColumns, columns);
         return columns;
+    }
+
+    /**
+     * {@link ErrorStrategy#KEEP_ORIGINAL} emits the untransformed input row when a step fails. That is
+     * only coherent when the fallback row still conforms to the resolved output schema and carries no
+     * sensitive values. It fails both ways otherwise: a renamed or added output column is absent from
+     * the input snapshot (the writer, which keys by output name, would emit null), and a masked column
+     * holds its unmasked value in the snapshot (a data leak, while {@link #sensitiveColumns()} still
+     * reports it redacted). Dropping or reordering columns stays safe — the writer ignores the extra
+     * snapshot keys. Rejected up front so a schedule or CLI run never silently corrupts or leaks a row.
+     */
+    private void validateKeepOriginalIsCoherent(List<ResultSetColumn> inputColumns,
+                                                List<ResultSetColumn> outputColumns) {
+        if (errorStrategy != ErrorStrategy.KEEP_ORIGINAL) {
+            return;
+        }
+        Set<String> inputNames = new LinkedHashSet<>();
+        for (ResultSetColumn column : inputColumns) {
+            inputNames.add(column.outputName());
+        }
+        List<String> introduced = new ArrayList<>();
+        for (ResultSetColumn column : outputColumns) {
+            if (!inputNames.contains(column.outputName())) {
+                introduced.add(column.outputName());
+            }
+        }
+        List<String> sensitive = new ArrayList<>(sensitiveColumns());
+        if (introduced.isEmpty() && sensitive.isEmpty()) {
+            return;
+        }
+        StringBuilder reason = new StringBuilder();
+        if (!introduced.isEmpty()) {
+            reason.append(" renames or adds output columns ").append(introduced);
+        }
+        if (!sensitive.isEmpty()) {
+            reason.append(reason.isEmpty() ? " masks columns " : " and masks columns ").append(sensitive);
+        }
+        throw new ExportException(ExitCodes.TRANSFORM_ERROR,
+            "Error strategy \"keepOriginal\" cannot be used with a pipeline that" + reason
+                + "; the original row would be emitted mis-shaped or with unmasked values. "
+                + "Use \"skipRow\" or \"fail\" instead.");
     }
 
     /**

@@ -155,19 +155,48 @@ class TransformPipelineTest {
     }
 
     @Test
-    void keepOriginalStrategyEmitsPrePipelineRow() {
+    void keepOriginalEmitsOriginalForValueOnlyPipeline() {
+        // A pass-through-schema transform that fails: keepOriginal is coherent here (no renamed or
+        // added columns, nothing sensitive) so it is permitted, and the untransformed row is emitted.
+        TransformPipeline pipeline = new TransformPipeline(
+            List.of(new TransformPipeline.Step("boom", boom())), ErrorStrategy.KEEP_ORIGINAL);
+
+        assertThat(pipeline.outputSchema(List.of(col(1, "a"))))
+            .extracting(ResultSetColumn::outputName).containsExactly("a");
+        Row out = pipeline.transform(new Row(Map.of("a", 1)));
+        assertThat(out).isNotNull();
+        assertThat(out.get("a")).isEqualTo(1);
+        assertThat(pipeline.metrics().snapshot().rowsOut()).isEqualTo(1);
+    }
+
+    @Test
+    void keepOriginalRejectedWhenPipelineRenamesColumns() {
+        // rename a->b changes the output column set, so the input snapshot could never conform to the
+        // output schema (the writer would emit null for "b"). Rejected up front by outputSchema.
         TransformPipeline pipeline = new TransformPipeline(List.of(
             new TransformPipeline.Step("rename",
                 RenameTransform.PROVIDER.create(new TransformSpec("rename", Map.of("from", "a", "to", "b")))),
             new TransformPipeline.Step("boom", boom())
         ), ErrorStrategy.KEEP_ORIGINAL);
 
-        Row out = pipeline.transform(new Row(Map.of("a", 1)));
-        assertThat(out).isNotNull();
-        // The original row (before the rename mutated it) is emitted.
-        assertThat(out.get("a")).isEqualTo(1);
-        assertThat(out.has("b")).isFalse();
-        assertThat(pipeline.metrics().snapshot().rowsOut()).isEqualTo(1);
+        assertThatThrownBy(() -> pipeline.outputSchema(List.of(col(1, "a"))))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("keepOriginal")
+            .hasMessageContaining("b");
+    }
+
+    @Test
+    void keepOriginalRejectedWhenPipelineMasks() {
+        // mask marks a column sensitive; the original snapshot holds the unmasked value, so emitting
+        // it would leak. Rejected up front regardless of whether the schema shape is preserved.
+        TransformPipeline pipeline = new TransformRegistry().build(new TransformConfig(
+            List.of(new TransformSpec("mask", Map.of("column", "email"))),
+            ErrorStrategy.KEEP_ORIGINAL, null));
+
+        assertThatThrownBy(() -> pipeline.outputSchema(List.of(col(1, "email"), col(2, "name"))))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("keepOriginal")
+            .hasMessageContaining("email");
     }
 
     @Test

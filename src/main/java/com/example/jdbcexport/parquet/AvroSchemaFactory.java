@@ -76,11 +76,12 @@ public final class AvroSchemaFactory {
         return switch (jdbcType) {
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
             case Types.BIGINT -> Schema.create(Schema.Type.LONG);
-            case Types.FLOAT, Types.REAL -> Schema.create(Schema.Type.FLOAT);
-            case Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
+            case Types.REAL -> Schema.create(Schema.Type.FLOAT);
+            case Types.FLOAT, Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
             case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
             case Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
-            case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+            case Types.TIMESTAMP -> LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+            case Types.TIMESTAMP_WITH_TIMEZONE -> LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.BLOB -> Schema.create(Schema.Type.BYTES);
             default -> Schema.create(Schema.Type.STRING);
         };

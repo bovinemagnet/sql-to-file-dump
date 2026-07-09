@@ -8,8 +8,11 @@ import java.nio.ByteBuffer;
 import java.sql.Date;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 
 public final class AvroValueMapper {
 
@@ -49,11 +52,12 @@ public final class AvroValueMapper {
                 long value = rs.getLong(index);
                 yield rs.wasNull() ? null : value;
             }
-            case Types.FLOAT, Types.REAL -> {
+            case Types.REAL -> {
                 float value = rs.getFloat(index);
                 yield rs.wasNull() ? null : value;
             }
-            case Types.DOUBLE -> {
+            case Types.FLOAT, Types.DOUBLE -> {
+                // SQL FLOAT is double precision (only REAL is single); getFloat would truncate it.
                 double value = rs.getDouble(index);
                 yield rs.wasNull() ? null : value;
             }
@@ -65,9 +69,20 @@ public final class AvroValueMapper {
                 Date value = rs.getDate(index);
                 yield value == null ? null : (int) value.toLocalDate().toEpochDay();
             }
-            case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> {
-                Timestamp value = rs.getTimestamp(index);
-                yield value == null ? null : value.toInstant().toEpochMilli() * 1000L;
+            case Types.TIMESTAMP -> {
+                // Zone-less wall-clock: read as LocalDateTime and encode as local-timestamp-micros
+                // in a fixed UTC reference so the result never depends on the JVM default zone.
+                LocalDateTime value = rs.getObject(index, LocalDateTime.class);
+                yield value == null ? null
+                    : value.toEpochSecond(ZoneOffset.UTC) * 1_000_000L + value.getNano() / 1000L;
+            }
+            case Types.TIMESTAMP_WITH_TIMEZONE -> {
+                OffsetDateTime value = rs.getObject(index, OffsetDateTime.class);
+                if (value == null) {
+                    yield null;
+                }
+                Instant instant = value.toInstant();
+                yield instant.getEpochSecond() * 1_000_000L + instant.getNano() / 1000L;
             }
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.BLOB -> {
                 byte[] value = rs.getBytes(index);

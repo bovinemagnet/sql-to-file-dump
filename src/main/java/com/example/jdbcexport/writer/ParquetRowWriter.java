@@ -10,6 +10,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 
@@ -51,6 +52,9 @@ public class ParquetRowWriter implements RowWriter {
             writer = AvroParquetWriter.<GenericRecord>builder(new LocalParquetOutputFile(outputPath))
                 .withSchema(schema)
                 .withCompressionCodec(parseCompression(compression))
+                // Overwrite is already gated by JdbcExportCommand.validatePaths (--overwrite); without
+                // this the default CREATE mode uses CREATE_NEW and fails when the file exists.
+                .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
                 .build();
         } catch (ExportException e) {
             throw e;

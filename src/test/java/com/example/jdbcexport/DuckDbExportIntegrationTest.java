@@ -17,6 +17,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.List;
+import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -103,6 +104,28 @@ class DuckDbExportIntegrationTest {
              var resultSet = statement.executeQuery("SELECT COUNT(*) FROM read_parquet('" + output.toAbsolutePath() + "')")) {
             resultSet.next();
             assertThat(resultSet.getLong(1)).isEqualTo(1L);
+        }
+    }
+
+    @Test
+    void exportsZonelessTimestampToParquetHostIndependently(@TempDir Path tempDir) throws Exception {
+        // A zone-less TIMESTAMP must round-trip to its wall-clock value regardless of the JVM zone
+        // (local-timestamp-micros), rather than being shifted by the default time zone.
+        TimeZone original = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("Australia/Brisbane"));
+        try {
+            Path output = tempDir.resolve("ts.parquet");
+            exportToFormat(output, OutputFormat.PARQUET, "SELECT TIMESTAMP '2024-06-01 12:34:56' AS ts");
+
+            try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+                 var statement = verifyConnection.createStatement();
+                 var resultSet = statement.executeQuery(
+                     "SELECT ts::VARCHAR FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+                resultSet.next();
+                assertThat(resultSet.getString(1)).isEqualTo("2024-06-01 12:34:56");
+            }
+        } finally {
+            TimeZone.setDefault(original);
         }
     }
 

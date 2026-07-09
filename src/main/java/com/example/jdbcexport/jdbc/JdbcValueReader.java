@@ -5,8 +5,10 @@ import java.sql.Date;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Time;
-import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.Base64;
 
 public final class JdbcValueReader {
@@ -29,11 +31,13 @@ public final class JdbcValueReader {
                 long value = rs.getLong(columnIndex);
                 yield rs.wasNull() ? null : value;
             }
-            case Types.FLOAT, Types.REAL -> {
+            case Types.REAL -> {
                 float value = rs.getFloat(columnIndex);
                 yield rs.wasNull() ? null : value;
             }
-            case Types.DOUBLE -> {
+            case Types.FLOAT, Types.DOUBLE -> {
+                // JDBC maps SQL FLOAT to double precision (only REAL is single); reading FLOAT via
+                // getFloat would silently truncate an 8-byte column.
                 double value = rs.getDouble(columnIndex);
                 yield rs.wasNull() ? null : value;
             }
@@ -42,13 +46,23 @@ public final class JdbcValueReader {
                 Date value = rs.getDate(columnIndex);
                 yield value == null ? null : value.toLocalDate().toString();
             }
-            case Types.TIME, Types.TIME_WITH_TIMEZONE -> {
+            case Types.TIME -> {
                 Time value = rs.getTime(columnIndex);
                 yield value == null ? null : value.toLocalTime().toString();
             }
-            case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> {
-                Timestamp value = rs.getTimestamp(columnIndex);
-                yield value == null ? null : value.toInstant().toString();
+            case Types.TIME_WITH_TIMEZONE -> {
+                OffsetTime value = rs.getObject(columnIndex, OffsetTime.class);
+                yield value == null ? null : value.toString();
+            }
+            case Types.TIMESTAMP -> {
+                // Zone-less: read the wall-clock directly so the output does not depend on the JVM
+                // default time zone (getTimestamp().toInstant() would shift it and add a false 'Z').
+                LocalDateTime value = rs.getObject(columnIndex, LocalDateTime.class);
+                yield value == null ? null : value.toString();
+            }
+            case Types.TIMESTAMP_WITH_TIMEZONE -> {
+                OffsetDateTime value = rs.getObject(columnIndex, OffsetDateTime.class);
+                yield value == null ? null : value.toString();
             }
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.BLOB -> {
                 byte[] value = rs.getBytes(columnIndex);

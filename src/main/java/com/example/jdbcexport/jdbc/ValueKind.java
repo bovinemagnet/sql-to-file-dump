@@ -25,8 +25,8 @@ public enum ValueKind {
             case Types.BOOLEAN, Types.BIT -> BOOLEAN;
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> INT;
             case Types.BIGINT -> LONG;
-            case Types.FLOAT, Types.REAL -> FLOAT;
-            case Types.DOUBLE -> DOUBLE;
+            case Types.REAL -> FLOAT;
+            case Types.FLOAT, Types.DOUBLE -> DOUBLE;
             case Types.DECIMAL, Types.NUMERIC -> DECIMAL;
             default -> STRING;
         };

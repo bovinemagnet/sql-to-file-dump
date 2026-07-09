@@ -119,7 +119,7 @@ Error response (400):
 
 [source,json]
 ----
-{"error":"SQL validation failed: only SELECT or WITH queries are permitted"}
+{"error":"SQL must be a single statement: a ';' separator was found before the end of the query."}
 ----
 
 [TIP]

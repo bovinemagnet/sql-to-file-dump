@@ -8,8 +8,8 @@ function liverunView() {
   const log = STATE.log[run.id] || [];
   const m = STATE.metrics;
   const batchesDone = run.fetchSize ? Math.floor(run.rowCount / run.fetchSize) : 0;
-  const peak = series.length ? Math.max(...series) * 64000 : run.throughput;
-  const avg = series.length ? series.reduce((a, b) => a + b, 0) / series.length * 64000 : run.throughput;
+  const peak = series.length ? Math.max(...series) : run.throughput;
+  const avg = series.length ? series.reduce((a, b) => a + b, 0) / series.length : run.throughput;
 
   const header = `<div class="dcard" style="margin-bottom:22px">
     <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
@@ -41,7 +41,7 @@ function liverunView() {
       <div class="dcard__sp"></div>
       <div class="lvhero lvhero--accent"><b>${fmtRate(run.throughput)}</b><i>rows/s</i></div>
     </div>
-    <div>${areaChart('lvgrad', series.length ? series : [0.2, 0.2], { ph: 230, stroke: 'var(--accent)' })}</div>
+    <div>${areaChart('lvgrad', series.length ? normaliseSeries(series) : [0.2, 0.2], { ph: 230, stroke: 'var(--accent)' })}</div>
     <div style="display:flex;gap:28px;margin-top:16px">
       <div><span class="sl-d">Peak</span> <span class="num" style="font:700 15px/1 'JetBrains Mono';margin-left:8px">${fmtRate(peak)}/s</span></div>
       <div><span class="sl-d">Avg</span> <span class="num" style="font:700 15px/1 'JetBrains Mono';margin-left:8px">${fmtRate(avg)}/s</span></div>

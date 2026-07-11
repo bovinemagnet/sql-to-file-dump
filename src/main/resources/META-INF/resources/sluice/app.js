@@ -21,7 +21,7 @@ const STATE = {
   schedules: [],     // schedules from /api/schedules
   editingSchedule: null, // id of the schedule currently being edited, or null
   transformations: [], // per-job transform summaries from /api/transformations
-  series: {},        // jobId → normalised throughput samples for the chart
+  series: {},        // jobId → raw instantaneous rows/s samples (normalised only at draw time)
   log: {},           // jobId → synthesised batch log lines
   lastRows: {},      // jobId → { rows, t } for instantaneous throughput
 };
@@ -252,8 +252,8 @@ function updateSeries(jobs) {
       const dt = (now - prev.t) / 1000;
       if (dt > 0) instantaneous = (j.rowCount - prev.rows) / dt;
     }
-    const norm = Math.max(0.02, Math.min(1, instantaneous / 64000));
-    STATE.series[j.id].push(norm);
+    if (!Number.isFinite(instantaneous) || instantaneous < 0) instantaneous = 0;
+    STATE.series[j.id].push(instantaneous);
     if (STATE.series[j.id].length > 44) STATE.series[j.id].shift();
 
     if (!prev || j.rowCount > prev.rows) {

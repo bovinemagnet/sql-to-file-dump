@@ -10,6 +10,15 @@ function _smooth(pts, h, w) {
   return { line: d, fill: d + ` L${w},${h} L0,${h} Z`, end: { x: w, y: h - pts[pts.length - 1] * h } };
 }
 
+/* map raw samples (e.g. rows/s) into 0..1 against the series max for the path
+ * helpers; the floor is purely visual so a flat or slow series still draws */
+function normaliseSeries(pts, floor) {
+  const f = floor == null ? 0.02 : floor;
+  const mx = Math.max(...pts);
+  if (!(mx > 0)) return pts.map(() => f);
+  return pts.map(v => Math.max(f, Math.min(1, v / mx)));
+}
+
 /* throughput-over-time area chart with gradient glow fill + live end dot */
 function areaChart(id, pts, opts) {
   const o = Object.assign({ w: 720, h: 220, stroke: 'var(--accent)', ph: 220, grid: true }, opts || {});

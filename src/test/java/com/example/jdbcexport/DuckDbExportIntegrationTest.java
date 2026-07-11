@@ -145,6 +145,22 @@ class DuckDbExportIntegrationTest {
         }
     }
 
+    @Test
+    void exportsNonAsciiAliasToParquet(@TempDir Path tempDir) throws Exception {
+        // Issue #23: a legal SQL alias like "café" must sanitise to a valid Avro name
+        // rather than blowing up in Avro's Schema name validation.
+        Path output = tempDir.resolve("alias.parquet");
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT amount AS \"café\" FROM bookings WHERE booking_id = 'B001'");
+
+        try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = verifyConnection.createStatement();
+             var resultSet = statement.executeQuery(
+                 "SELECT caf_ FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+            resultSet.next();
+            assertThat(resultSet.getString(1)).isEqualTo("123.45");
+        }
+    }
+
     private void exportToFormat(Path output, OutputFormat format, String sql) throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
             setupTable(connection);

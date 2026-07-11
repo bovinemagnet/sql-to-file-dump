@@ -129,6 +129,22 @@ class DuckDbExportIntegrationTest {
         }
     }
 
+    @Test
+    void exportsTimestampToParquetWithMicrosecondPrecision(@TempDir Path tempDir) throws Exception {
+        // Issue #21: sub-millisecond digits must round-trip; a millis-based conversion
+        // would read back as 12:00:00.123 instead of 12:00:00.123456.
+        Path output = tempDir.resolve("micros.parquet");
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT TIMESTAMP '2024-01-01 12:00:00.123456' AS ts");
+
+        try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = verifyConnection.createStatement();
+             var resultSet = statement.executeQuery(
+                 "SELECT ts::VARCHAR FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+            resultSet.next();
+            assertThat(resultSet.getString(1)).isEqualTo("2024-01-01 12:00:00.123456");
+        }
+    }
+
     private void exportToFormat(Path output, OutputFormat format, String sql) throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
             setupTable(connection);

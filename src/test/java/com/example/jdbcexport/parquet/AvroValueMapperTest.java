@@ -70,6 +70,32 @@ class AvroValueMapperTest {
     }
 
     @Test
+    void zonelessTimestampKeepsMicrosecondPrecision() throws Exception {
+        // Issue #21: sub-millisecond digits must survive; a millis-based conversion would
+        // truncate .123456 to .123000.
+        long expected = LocalDateTime.of(2024, 1, 1, 12, 0, 0, 123_456_000).toEpochSecond(ZoneOffset.UTC) * 1_000_000L + 123_456L;
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT TIMESTAMP '2024-01-01 12:00:00.123456' AS ts")) {
+            rs.next();
+            Object value = AvroValueMapper.readValue(rs, column(Types.TIMESTAMP, "TIMESTAMP"));
+            assertThat(value).isEqualTo(expected);
+        }
+    }
+
+    @Test
+    void timestampWithTimeZoneKeepsMicrosecondPrecision() throws Exception {
+        long expected = Instant.parse("2024-01-01T12:00:00.123456Z").getEpochSecond() * 1_000_000L + 123_456L;
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT TIMESTAMPTZ '2024-01-01 12:00:00.123456+00:00' AS ts")) {
+            rs.next();
+            Object value = AvroValueMapper.readValue(rs, column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP WITH TIME ZONE"));
+            assertThat(value).isEqualTo(expected);
+        }
+    }
+
+    @Test
     void floatTypeMapsAtDoublePrecision() throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
              Statement statement = connection.createStatement();

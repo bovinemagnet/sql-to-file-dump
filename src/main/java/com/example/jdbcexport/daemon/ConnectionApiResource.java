@@ -2,6 +2,7 @@ package com.example.jdbcexport.daemon;
 
 import com.example.jdbcexport.error.ExportException;
 import com.example.jdbcexport.jdbc.JdbcConnectionFactory;
+import com.example.jdbcexport.jdbc.JdbcUrlRedactor;
 import com.example.jdbcexport.jdbc.PasswordResolver;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -109,14 +110,17 @@ public class ConnectionApiResource {
                     md.getDatabaseProductName() + " " + md.getDatabaseProductVersion());
             }
         } catch (Exception e) {
-            return new TestResult(false, e.getMessage(), null);
+            // Issue #30: driver failure messages frequently echo the full connection string.
+            return new TestResult(false, JdbcUrlRedactor.redact(e.getMessage()), null);
         }
     }
 
     private ConnectionView view(SavedConnection c) {
         ConnectionStore.Status status = store.statusOf(c.id()).orElse(null);
+        // Issue #30: never echo inline URL credentials from the API (the raw URL stays in the
+        // store so connections keep working; only the view is redacted).
         return new ConnectionView(
-            c.id(), c.name(), c.driver(), c.url(), c.user(), c.passwordEnv(),
+            c.id(), c.name(), c.driver(), JdbcUrlRedactor.redact(c.url()), c.user(), c.passwordEnv(),
             c.lastUsedAt() == null ? null : c.lastUsedAt().toEpochMilli(),
             status == null ? "unknown" : status.state(),
             status == null ? null : status.message(),

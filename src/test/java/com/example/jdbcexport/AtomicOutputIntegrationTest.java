@@ -126,7 +126,7 @@ class AtomicOutputIntegrationTest {
             setupTable(connection);
             List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, QUERY, 1000);
             ExportOptions options = new ExportOptions(
-                "jdbc:duckdb:", "test", null, QUERY, null, format, output.toString(),
+                "jdbc:duckdb:", "test", QUERY, null, format, output.toString(),
                 1000, null, null, true, false, false, false, false, true, "", "SNAPPY");
             try (ObservingWriter writer = new ObservingWriter(
                     new RowWriterFactory().create(options, columns), failAfterRows)) {

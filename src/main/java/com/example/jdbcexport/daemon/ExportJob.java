@@ -1,6 +1,7 @@
 package com.example.jdbcexport.daemon;
 
 import com.example.jdbcexport.cli.OutputFormat;
+import com.example.jdbcexport.jdbc.JdbcUrlRedactor;
 import com.example.jdbcexport.transform.TransformMetrics;
 
 import java.nio.file.Files;
@@ -46,7 +47,9 @@ public final class ExportJob {
     ExportJob(String id, Instant submittedAt, ExportJobRequest request, int fetchSize) {
         this.id = id;
         this.submittedAt = submittedAt;
-        this.url = request.url();
+        // Issue #30: the URL is display-only here and is echoed by the JSON API, so any
+        // inline credentials are redacted at the point of storage.
+        this.url = JdbcUrlRedactor.redact(request.url());
         this.user = request.user();
         this.sql = request.sql();
         this.format = request.format();
@@ -95,7 +98,8 @@ public final class ExportJob {
     void markFailed(Instant now, String message) {
         status = Status.FAILED;
         completedAt = now;
-        error = message;
+        // Issue #30: driver failure messages frequently echo the full connection string.
+        error = JdbcUrlRedactor.redact(message);
     }
 
     void recordTransformMetrics(TransformMetrics.Snapshot snapshot, long slowThresholdMs) {

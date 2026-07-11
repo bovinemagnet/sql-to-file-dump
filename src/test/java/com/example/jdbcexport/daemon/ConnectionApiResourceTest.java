@@ -72,6 +72,45 @@ class ConnectionApiResourceTest {
     }
 
     @Test
+    void listRedactsInlineUrlCredentials() {
+        // Issue #30: GET /api/connections must not echo credentials embedded in a saved URL.
+        String createBody = given()
+            .header("X-Requested-By", "jdbc-export")
+            .formParam("name", "leaky")
+            .formParam("driver", "postgresql")
+            .formParam("url", "jdbc:postgresql://bob:hunter2@db:5432/appdb")
+            .formParam("user", "bob")
+            .when().post("/api/connections")
+            .then().statusCode(200)
+            .body(not(containsString("hunter2")))
+            .extract().asString();
+
+        String id = extractId(createBody);
+        try {
+            get("/api/connections").then().statusCode(200)
+                .body(containsString("jdbc:postgresql://bob:*****@db:5432/appdb"))
+                .body(not(containsString("hunter2")));
+        } finally {
+            given().header("X-Requested-By", "jdbc-export")
+                .when().delete("/api/connections/" + id)
+                .then().statusCode(204);
+        }
+    }
+
+    @Test
+    void adHocTestFailureMessageRedactsInlineUrlCredentials() {
+        // Issue #30: the driver's failure message often echoes the connection string.
+        given()
+            .header("X-Requested-By", "jdbc-export")
+            .formParam("url", "jdbc:duckdb-no-such-driver://bob:hunter2@db/none")
+            .formParam("user", "bob")
+            .when().post("/api/connections/test")
+            .then().statusCode(200)
+            .body(containsString("\"ok\":false"))
+            .body(not(containsString("hunter2")));
+    }
+
+    @Test
     void createWithMissingFieldsReturnsBadRequest() {
         given()
             .header("X-Requested-By", "jdbc-export")

@@ -176,7 +176,7 @@ public class ExportJobService {
             job.recordSchema(outputColumns.size(), describeServer(connection));
 
             ExportOptions options = new ExportOptions(
-                request.url(), request.user(), resolvedPassword, request.sql(), null,
+                request.url(), request.user(), request.sql(), null,
                 request.format(), request.output(), DEFAULT_FETCH_SIZE, null, null,
                 request.overwrite(), false, false, false, false, true, "", request.parquetCompression());
             try (RowWriter writer = new RowWriterFactory().create(options, outputColumns, transforming)) {

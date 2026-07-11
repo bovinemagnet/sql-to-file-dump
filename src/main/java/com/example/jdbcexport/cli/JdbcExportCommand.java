@@ -4,6 +4,7 @@ import com.example.jdbcexport.error.ExitCodes;
 import com.example.jdbcexport.error.ExportException;
 import com.example.jdbcexport.jdbc.JdbcConnectionFactory;
 import com.example.jdbcexport.jdbc.JdbcExporter;
+import com.example.jdbcexport.jdbc.JdbcUrlRedactor;
 import com.example.jdbcexport.jdbc.PasswordResolver;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.example.jdbcexport.jdbc.ResultSetSchemaReader;
@@ -164,7 +165,8 @@ public class JdbcExportCommand implements Callable<Integer> {
         prepareOutputDirectories();
 
         if (verbose) {
-            LOG.info(() -> "Connecting to " + url);
+            // Issue #30: never log inline URL credentials.
+            LOG.info(() -> "Connecting to " + JdbcUrlRedactor.redact(url));
         }
 
         try (Connection connection = JdbcConnectionFactory.connect(url, user, resolvedPassword)) {
@@ -176,7 +178,6 @@ public class JdbcExportCommand implements Callable<Integer> {
             ExportOptions options = new ExportOptions(
                 url,
                 user,
-                resolvedPassword,
                 sql,
                 sqlFile,
                 outputFormat,

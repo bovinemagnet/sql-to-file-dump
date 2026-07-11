@@ -185,7 +185,6 @@ class DuckDbExportIntegrationTest {
             ExportOptions options = new ExportOptions(
                 "jdbc:duckdb:",
                 "test",
-                null,
                 sql,
                 null,
                 format,

@@ -150,7 +150,7 @@ class DuckDbTransformIntegrationTest {
     }
 
     private static ExportOptions options(Path output, OutputFormat format) {
-        return new ExportOptions("jdbc:duckdb:", "test", null, "sql", null, format, output.toString(),
+        return new ExportOptions("jdbc:duckdb:", "test", "sql", null, format, output.toString(),
             1000, null, null, false, false, false, false, false, true, "", "SNAPPY");
     }
 

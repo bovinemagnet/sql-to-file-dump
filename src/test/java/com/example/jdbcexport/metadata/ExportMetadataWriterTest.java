@@ -48,6 +48,22 @@ class ExportMetadataWriterTest {
     }
 
     @Test
+    void redactsInlineCredentialsInJdbcUrl(@TempDir Path tempDir) throws Exception {
+        // Issue #30: a URL with inline credentials must never reach the sidecar verbatim.
+        Path metadataPath = tempDir.resolve("export.metadata.json");
+        ExportMetadata metadata = new ExportMetadata(
+            "jdbc-export-cli", "json", "jdbc:postgresql://bob:hunter2@localhost:5432/appdb",
+            "<inline>", "out.json", 0, "2026-06-13T00:00:00Z", "2026-06-13T00:00:00Z", 0, List.of());
+
+        ExportMetadataWriter.write(metadata, metadataPath);
+
+        JsonNode root = new ObjectMapper().readTree(metadataPath.toFile());
+        assertThat(root.get("jdbcUrl").asText())
+            .isEqualTo("jdbc:postgresql://bob:*****@localhost:5432/appdb");
+        assertThat(Files.readString(metadataPath)).doesNotContain("hunter2");
+    }
+
+    @Test
     void createsParentDirectories(@TempDir Path tempDir) throws Exception {
         Path metadataPath = tempDir.resolve("nested/dir/export.metadata.json");
         ExportMetadata metadata = new ExportMetadata(

@@ -71,7 +71,7 @@ class JsonWritersTest {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
             List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, sql, 100);
             ExportOptions options = new ExportOptions(
-                "jdbc:duckdb:", "test", null, sql, null, format, output.toString(),
+                "jdbc:duckdb:", "test", sql, null, format, output.toString(),
                 100, null, null, false, false, false, false, false, true, "", "SNAPPY");
             try (RowWriter writer = new RowWriterFactory().create(options, columns)) {
                 new JdbcExporter().export(connection, sql, 100, null, writer);

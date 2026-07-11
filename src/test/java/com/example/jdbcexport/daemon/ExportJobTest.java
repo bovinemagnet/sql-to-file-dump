@@ -34,4 +34,23 @@ class ExportJobTest {
         job.markCompleted(Instant.now(), 1);
         assertThat(job.getOutputBytes()).isEqualTo(10L);
     }
+
+    @Test
+    void redactsInlineUrlCredentialsAndFailureMessages() {
+        // Issue #30: the job's URL and stored error are surfaced verbatim by the JSON API,
+        // so credentials embedded in either must be redacted at the point they are stored.
+        ExportJobRequest request = new ExportJobRequest(
+            "jdbc:postgresql://bob:hunter2@db:5432/appdb", "bob", null, null,
+            "SELECT 1", OutputFormat.CSV, "out.csv", false);
+        ExportJob job = new ExportJob("1", Instant.now(), request, 1000);
+
+        assertThat(job.getUrl()).isEqualTo("jdbc:postgresql://bob:*****@db:5432/appdb");
+        assertThat(job.getDriver()).isEqualTo("postgresql");
+
+        job.markFailed(Instant.now(),
+            "Connection to jdbc:postgresql://bob:hunter2@db:5432/appdb refused");
+        assertThat(job.getError())
+            .isEqualTo("Connection to jdbc:postgresql://bob:*****@db:5432/appdb refused")
+            .doesNotContain("hunter2");
+    }
 }

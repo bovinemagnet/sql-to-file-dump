@@ -23,6 +23,48 @@ class ExportJobServiceTest {
         // ServiceLoader scan under the Quarkus classloader, leaving the DuckDB driver
         // invisible to this classloader. Register it explicitly.
         DriverManager.registerDriver(new org.duckdb.DuckDBDriver());
+        DriverManager.registerDriver(new ErrorThrowingDriver());
+    }
+
+    /** Simulates a broken driver whose connect throws an {@link Error}, not an exception (issue #32). */
+    public static final class ErrorThrowingDriver implements java.sql.Driver {
+        @Override
+        public java.sql.Connection connect(String url, java.util.Properties info) {
+            if (!acceptsURL(url)) {
+                return null;
+            }
+            throw new NoClassDefFoundError("simulated missing driver class");
+        }
+
+        @Override
+        public boolean acceptsURL(String url) {
+            return url != null && url.startsWith("jdbc:boom:");
+        }
+
+        @Override
+        public java.sql.DriverPropertyInfo[] getPropertyInfo(String url, java.util.Properties info) {
+            return new java.sql.DriverPropertyInfo[0];
+        }
+
+        @Override
+        public int getMajorVersion() {
+            return 0;
+        }
+
+        @Override
+        public int getMinorVersion() {
+            return 0;
+        }
+
+        @Override
+        public boolean jdbcCompliant() {
+            return false;
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() {
+            return java.util.logging.Logger.getLogger("boom");
+        }
     }
 
     private final ExportJobService service = new ExportJobService();
@@ -127,6 +169,18 @@ class ExportJobServiceTest {
 
         assertThat(job.getStatus()).isEqualTo(ExportJob.Status.FAILED);
         assertThat(job.getError()).isNotBlank();
+    }
+
+    @Test
+    void marksJobFailedWhenAnErrorEscapesTheRun(@TempDir Path tempDir) {
+        ExportJob job = service.submit(new ExportJobRequest(
+            "jdbc:boom:", "ignored", null, null, "SELECT 1 AS a", OutputFormat.CSV,
+            tempDir.resolve("boom.csv").toString(), false));
+
+        awaitFinished(job);
+
+        assertThat(job.getStatus()).isEqualTo(ExportJob.Status.FAILED);
+        assertThat(job.getError()).contains("simulated missing driver class");
     }
 
     @Test

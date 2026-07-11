@@ -188,8 +188,15 @@ public class ExportJobService {
                         job::recordProgress, columns, pipeline);
                 job.markCompleted(Instant.now(), result.rowCount());
             }
-        } catch (Exception e) {
-            job.markFailed(Instant.now(), e.getMessage());
+        } catch (Throwable t) {
+            // Catch Throwable, not Exception: an Error (OOM, StackOverflowError,
+            // NoClassDefFoundError from a missing driver) must not leave the job
+            // RUNNING forever (issue #32). Fatal errors are rethrown after the job
+            // is marked failed, preserving the executor's default handling.
+            job.markFailed(Instant.now(), t.getMessage());
+            if (t instanceof Error error) {
+                throw error;
+            }
         } finally {
             if (pipeline != null && !pipeline.isEmpty()) {
                 recordTransformMetrics(job, request, pipeline);

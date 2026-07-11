@@ -34,7 +34,7 @@ This page describes every security control in the tool and its limitations, so y
 | Prevents HTML injection from query results, column names, and error messages
 
 | Read-only SQL guard
-| Only `SELECT` and `WITH` statements are accepted
+| Comments and quoted text are scrubbed, then the statement must be a single `SELECT` or `WITH` free of data-modifying keywords
 | Guards against accidental mutation; not a security boundary against a malicious SQL string
 |===
 
@@ -152,7 +152,60 @@ This prevents a database from injecting HTML or script content into the dashboar
 
 NOTE: The read-only guard protects against accidental mutations, not against a deliberately crafted SQL string. If the SQL you supply can be influenced by untrusted input, you must validate and sanitise it before passing it to `jdbc-export`. Only run SQL that you trust.
 
-The guard uses the JDBC connection in read-only mode. Combined with the statement check, this provides a defence-in-depth layer against unintended writes.
+=== How validation works
+
+`SqlSafetyValidator` runs before any database connection is opened. It first produces a scrubbed copy of the SQL with comments and quoted text removed, then checks the scrubbed copy against a small set of rules.
+
+Scrubbing removes:
+
+* line comments (`-- ...`) and block comments (`/* ... */`), including nested block comments
+* single-quoted string literals, including doubled-quote (`''`) escapes and PostgreSQL `E'...'` backslash escapes
+* `$tag$ ... $tag$` dollar-quoted strings
+* `"delimited identifiers"`
+
+Because scrubbing happens first, a semicolon or a keyword such as `DELETE` sitting inside a comment or a piece of quoted text is invisible to the rules that follow -- it cannot be used to smuggle a second statement, or a data-modifying keyword, past the validator. An unterminated block comment, string literal, dollar-quoted string, or delimited identifier is rejected outright, since the validator has no way to tell where the quoted region ends.
+
+Against the scrubbed SQL, the validator then applies:
+
+* *Single statement only* -- a `;` is permitted only as the final character of the statement. A `;` found anywhere else is rejected.
+* *Leading keyword* -- the statement must begin with `SELECT` or `WITH` (case-insensitive; the comparison is locale-independent, so it behaves the same regardless of the JVM's default locale).
+* *No forbidden keywords* -- `insert`, `update`, `delete`, `merge`, `drop`, `create`, `alter`, `truncate`, `grant`, `revoke`, `execute`, `commit`, and `rollback` are rejected wherever they appear as whole words outside quoted text. This closes a data-modifying common table expression bypass, where a `WITH` clause performs a write and a trailing `SELECT` makes the overall statement look read-only, for example `WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d`.
+
+The keyword check also has the side effect of rejecting `SELECT ... FOR UPDATE` clauses, because `update` is one of the forbidden keywords and `FOR UPDATE` contains it as a whole word. This is not a loss: `FOR UPDATE` takes write locks on matching rows, which is not valid against a read-only connection in any case.
+
+Any violation raises `ExportException` with exit code `2` (SQL input error). See xref:cli-reference.adoc[CLI Reference] for the full list of exit codes.
+
+=== Accepted and rejected examples
+
+[cols="1,4",options="header"]
+|===
+|Result |SQL
+
+|Accepted
+|A leading comment header, e.g. `-- report query` followed by `SELECT * FROM orders`
+
+|Accepted
+|A single trailing semicolon: `SELECT * FROM orders;`
+
+|Accepted
+|A forbidden keyword inside a string literal: `SELECT * FROM audit WHERE action = 'delete'`
+
+|Accepted
+|A forbidden keyword as a quoted identifier: `SELECT "delete" FROM t`
+
+|Rejected
+|A second statement: `SELECT 1; DROP TABLE users`
+
+|Rejected
+|A data-modifying common table expression: `WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d`
+
+|Rejected
+|A row-locking clause: `SELECT * FROM orders FOR UPDATE`
+|===
+
+=== Defence in depth: read-only connection
+
+In addition to the SQL check, `jdbc-export` requests a read-only JDBC connection (`Connection.setReadOnly(true)`). Driver support for this varies. If a driver rejects or silently ignores the read-only request, `jdbc-export` logs a `WARNING` noting that the connection may still be writable and that enforcement therefore relies on SQL validation alone. The export is not failed in this case -- the SQL check described above remains the primary guard.
 
 == Job history and persistence
 

@@ -225,8 +225,10 @@ public class ExportJobService {
         TransformMetricsSettings settings = TransformMetricsSettings.fromConfig();
         job.recordTransformMetrics(snapshot, settings.slowTransformThresholdMs());
         String output = request.format() == null ? "unknown" : request.format().name().toLowerCase(Locale.ROOT);
+        // Metrics are published after markCompleted/markFailed, so tag the real outcome (issue #34).
+        String status = job.getStatus() == ExportJob.Status.FAILED ? "error" : "success";
         TransformMetricsPublisher.publish(Metrics.globalRegistry, "daemon", "daemon", output,
-            snapshot, Duration.ofMillis(job.getElapsedMillis()), settings);
+            status, snapshot, Duration.ofMillis(job.getElapsedMillis()), settings);
     }
 
     private static String describeServer(Connection connection) {

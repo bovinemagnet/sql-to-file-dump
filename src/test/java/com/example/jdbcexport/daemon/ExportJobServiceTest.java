@@ -113,6 +113,30 @@ class ExportJobServiceTest {
     }
 
     @Test
+    void failedTransformJobPublishesErrorStatusMetrics(@TempDir Path tempDir) {
+        var registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        io.micrometer.core.instrument.Metrics.addRegistry(registry);
+        try {
+            // The rename references a missing column, so the export fails after the
+            // pipeline is built; the published metrics must not claim success (issue #34).
+            ExportJob job = service.submit(requestWithTransforms(
+                "SELECT 1 AS a", tempDir.resolve("fail.csv"), List.of("rename:missing=x")));
+            awaitFinished(job);
+
+            assertThat(job.getStatus()).isEqualTo(ExportJob.Status.FAILED);
+            // The global composite may carry success-tagged meters from other tests,
+            // so assert on the error-tagged timer: it only exists once the failed
+            // outcome is threaded through to the publisher.
+            var errorTimer = registry.find("sql_transformer_transform_pipeline_duration_seconds")
+                .tag("status", "error").timer();
+            assertThat(errorTimer).isNotNull();
+            assertThat(errorTimer.count()).isEqualTo(1);
+        } finally {
+            io.micrometer.core.instrument.Metrics.removeRegistry(registry);
+        }
+    }
+
+    @Test
     void passThroughJobIsNotTransformsEnabled(@TempDir Path tempDir) throws Exception {
         ExportJob job = service.submit(request("SELECT 1 AS a", tempDir.resolve("plain.csv")));
         awaitFinished(job);

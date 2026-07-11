@@ -299,7 +299,7 @@ Metrics are also emitted to Micrometer (scrapeable at `/q/metrics` in daemon mod
 |counter
 |===
 
-The `reason` tag on dropped rows is `filtered` (a transform returned no row) or `error` (skipped under `skipRow`).
+The `status` tag reflects the export outcome: `success` when the export finished, or `error` when it failed (for example, a `fail`-strategy abort in daemon mode). The `reason` tag on dropped rows is `filtered` (a transform returned no row) or `error` (skipped under `skipRow`).
 
 Metrics are controlled by configuration, with defaults:
 

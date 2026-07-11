@@ -19,7 +19,7 @@ function liverunView() {
         <div style="font:700 18px/1.2 'Space Grotesk';letter-spacing:-.01em">${esc(run.output)}</div>
         <div class="meta" style="margin-top:8px">
           ${run.format ? formatPill(run.format) : ''} <span class="dot-sep"></span>
-          ${driverBadge(esc(run.driver))} <span class="dot-sep"></span>
+          ${driverBadge(run.driver)} <span class="dot-sep"></span>
           ${esc(run.serverInfo || 'connecting…')} <span class="dot-sep"></span> codec ${esc(run.compression)}
         </div>
       </div>

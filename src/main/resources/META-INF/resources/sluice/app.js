@@ -31,7 +31,9 @@ function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-function escAttr(s) { return esc(s); }
+/* attribute-context escape — esc() plus single quotes, so values are inert in
+ * both double- and single-quoted HTML attributes */
+function escAttr(s) { return esc(s).replace(/'/g, '&#39;'); }
 
 function fmtUptime(ms) {
   const s = Math.floor((ms || 0) / 1000);

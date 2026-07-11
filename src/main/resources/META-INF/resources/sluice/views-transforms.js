@@ -56,7 +56,7 @@ function txCard(t) {
       ${kpiTile({ ic: 'output', k: 'Rows out', v: fmtInt(t.rowsOut) })}
       ${kpiTile({ ic: 'filter_alt', k: 'Dropped', v: fmtInt(t.rowsDropped) })}
       ${kpiTile({ ic: 'timer', k: 'Pipeline', v: total })}
-      ${kpiTile({ ic: 'schedule', k: 'Last run', v: esc(t.submittedAt || '—') })}
+      ${kpiTile({ ic: 'schedule', k: 'Last run', v: t.submittedAt || '—' })}
     </div>
     <div class="otable">${head}${rows || ''}</div>
   </div>`;

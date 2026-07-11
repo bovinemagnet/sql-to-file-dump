@@ -47,6 +47,28 @@ class ScheduleStoreTest {
     }
 
     @Test
+    void rejectsUnsupportedFormat(@TempDir Path dir) {
+        ScheduleStore store = store(dir);
+        // The format is rendered in the dashboard and drives the writer: whitelist it.
+        assertThatThrownBy(() -> store.create(new Schedule(null, "n", true, "conn-1", "select 1 as a",
+            "html", null, "o_{date}.html", true, "cron", "0 2 * * *", null, null, null, null, null, null, null)))
+            .isInstanceOf(ExportException.class).hasMessageContaining("format");
+        assertThatThrownBy(() -> store.create(new Schedule(null, "n", true, "conn-1", "select 1 as a",
+            "csv<script>", null, "o_{date}.csv", true, "cron", "0 2 * * *", null, null, null, null, null, null, null)))
+            .isInstanceOf(ExportException.class).hasMessageContaining("format");
+    }
+
+    @Test
+    void acceptsAllSupportedFormatsCaseInsensitively(@TempDir Path dir) {
+        ScheduleStore store = store(dir);
+        for (String format : new String[] {"csv", "TSV", "json", "NDJSON", "parquet"}) {
+            Schedule s = store.create(new Schedule(null, "n-" + format, true, "conn-1", "select 1 as a",
+                format, null, "o_{date}.out", true, "cron", "0 2 * * *", null, null, null, null, null, null, null));
+            assertThat(s.format()).isEqualTo(format.toLowerCase());
+        }
+    }
+
+    @Test
     void persistsAcrossInstances(@TempDir Path dir) throws Exception {
         ScheduleStore store = store(dir);
         Schedule s = store.create(draft("hourly", "cron", "0 * * * *"));
@@ -80,6 +102,34 @@ class ScheduleStoreTest {
         assertThat(store.setEnabled(s.id(), false).orElseThrow().enabled()).isFalse();
         assertThat(store.delete(s.id())).isTrue();
         assertThat(store.delete(s.id())).isFalse();
+    }
+
+    @Test
+    void quarantinesCorruptFileInsteadOfSilentlyReplacingIt(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("schedule.json");
+        String corrupt = "[ {\"id\": truncated";
+        Files.writeString(file, corrupt);
+
+        ScheduleStore store = store(dir);
+
+        // The store starts empty, but the operator's data survives in a quarantine file.
+        assertThat(store.list()).isEmpty();
+        assertThat(Files.exists(file)).isFalse();
+        Path quarantined = quarantineFileIn(dir);
+        assertThat(Files.readString(quarantined)).isEqualTo(corrupt);
+
+        // Subsequent writes go to a fresh file and leave the quarantined data untouched.
+        store.create(draft("fresh", "cron", "0 2 * * *"));
+        assertThat(Files.readString(file)).contains("fresh");
+        assertThat(Files.readString(quarantined)).isEqualTo(corrupt);
+    }
+
+    private static Path quarantineFileIn(Path dir) throws Exception {
+        try (var files = Files.list(dir)) {
+            return files.filter(p -> p.getFileName().toString().startsWith("schedule.json.bad-"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No quarantine file found in " + dir));
+        }
     }
 
     @Test

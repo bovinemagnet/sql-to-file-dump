@@ -82,6 +82,55 @@ class ConnectionStoreTest {
     }
 
     @Test
+    void quarantinesCorruptFileInsteadOfSilentlyReplacingIt(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("connections.json");
+        String corrupt = "{ this is not json";
+        Files.writeString(file, corrupt);
+
+        ConnectionStore store = store(dir);
+
+        // The store starts empty, but the operator's data survives in a quarantine file.
+        assertThat(store.list()).isEmpty();
+        assertThat(Files.exists(file)).isFalse();
+        Path quarantined = quarantineFileIn(dir);
+        assertThat(Files.readString(quarantined)).isEqualTo(corrupt);
+
+        // Subsequent writes go to a fresh file and leave the quarantined data untouched.
+        store.create("fresh", "postgres", "jdbc:postgresql://h/db", "u", null);
+        assertThat(Files.readString(file)).contains("fresh");
+        assertThat(Files.readString(quarantined)).isEqualTo(corrupt);
+    }
+
+    private static Path quarantineFileIn(Path dir) throws Exception {
+        try (var files = Files.list(dir)) {
+            return files.filter(p -> p.getFileName().toString().startsWith("connections.json.bad-"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No quarantine file found in " + dir));
+        }
+    }
+
+    @Test
+    void rejectsDriverWithUnsafeCharacters(@TempDir Path dir) {
+        ConnectionStore store = store(dir);
+        // The driver value is rendered in the dashboard, so it must stay within a safe charset.
+        assertThatThrownBy(() -> store.create("n", "<script>alert(1)</script>", "jdbc:postgresql://h/db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+        assertThatThrownBy(() -> store.create("n", "post gres", "jdbc:postgresql://h/db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+        // A driver derived from a hostile URL is validated the same way.
+        assertThatThrownBy(() -> store.create("n", "", "jdbc:p<img src=x>g:db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+    }
+
+    @Test
+    void rejectsUnsafeDriverOnUpdate(@TempDir Path dir) {
+        ConnectionStore store = store(dir);
+        SavedConnection conn = store.create("n", "postgres", "jdbc:postgresql://h/db", "u", null);
+        assertThatThrownBy(() -> store.update(conn.id(), "n", "\"onload=x", "jdbc:postgresql://h/db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+    }
+
+    @Test
     void rejectsMissingRequiredFields(@TempDir Path dir) {
         ConnectionStore store = store(dir);
         assertThatThrownBy(() -> store.create("", "postgres", "jdbc:postgresql://h/db", "u", null))

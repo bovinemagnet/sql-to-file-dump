@@ -7,8 +7,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.UUID;
 
 public final class ExportMetadataWriter {
 
@@ -46,10 +50,31 @@ public final class ExportMetadataWriter {
                 columns.add(entry);
             }
             root.set("columns", columns);
-            mapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), root);
+            writeAtomically(mapper, root, path);
         } catch (Exception e) {
             throw new ExportException(ExitCodes.OUTPUT_WRITE_ERROR,
                 "Failed to write metadata file: " + path, e);
+        }
+    }
+
+    /**
+     * Writes to a temporary sibling and renames onto the target (issue #24), so a failure never
+     * leaves a truncated metadata file and an existing sidecar is replaced only by a complete one.
+     */
+    private static void writeAtomically(ObjectMapper mapper, ObjectNode root, Path path) throws IOException {
+        Path absolute = path.toAbsolutePath();
+        Path temporary = absolute.getParent()
+            .resolve("." + absolute.getFileName() + "." + UUID.randomUUID() + ".tmp");
+        try {
+            mapper.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), root);
+            try {
+                Files.move(temporary, absolute,
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temporary, absolute, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 }

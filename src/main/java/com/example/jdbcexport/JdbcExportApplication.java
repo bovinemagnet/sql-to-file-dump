@@ -24,6 +24,15 @@ public class JdbcExportApplication implements QuarkusApplication {
         Quarkus.run(JdbcExportApplication.class, args);
     }
 
+    /**
+     * Top-command options that take no value. Any other {@code -}/{@code --} token
+     * without an inline {@code =value} is assumed to consume the next argument.
+     * Keep in sync with the boolean options on {@link JdbcExportCommand}.
+     */
+    private static final java.util.Set<String> TOP_COMMAND_FLAGS = java.util.Set.of(
+        "--overwrite", "--dry-run", "--describe", "--verbose", "--pretty",
+        "--include-header", "--no-include-header", "-h", "--help", "-V", "--version");
+
     /*
      * The HTTP server starts before Picocli parses arguments, so daemon networking must
      * be configured here. A normal CLI export (real args, not "daemon") disables the
@@ -32,9 +41,9 @@ public class JdbcExportApplication implements QuarkusApplication {
      * error that exits immediately anyway.
      */
     static void configureHttp(String[] args) {
-        boolean daemon = args.length > 0 && "daemon".equals(args[0]);
-        if (daemon) {
-            configureDaemonHttp(args);
+        int daemonIndex = daemonArgIndex(args);
+        if (daemonIndex >= 0) {
+            configureDaemonHttp(args, daemonIndex);
             return;
         }
         if (args.length > 0) {
@@ -42,10 +51,32 @@ public class JdbcExportApplication implements QuarkusApplication {
         }
     }
 
-    private static void configureDaemonHttp(String[] args) {
+    /*
+     * Picocli allows global options before the subcommand, so "daemon" is not always
+     * args[0]. A bare "daemon" token is treated as the subcommand only when it is not
+     * the value of a preceding value-taking option (e.g. --sql daemon must stay a CLI
+     * export). Heuristic limit: options are classified against the hardcoded
+     * TOP_COMMAND_FLAGS list; an unrecognised flag directly followed by "daemon" would
+     * be misread as an option/value pair and leave HTTP disabled — Picocli then rejects
+     * the unknown option anyway, so the process still fails fast rather than hanging.
+     */
+    private static int daemonArgIndex(String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i];
+            if ("daemon".equals(arg)) {
+                return i;
+            }
+            if (arg.startsWith("-") && !arg.contains("=") && !TOP_COMMAND_FLAGS.contains(arg)) {
+                i++; // value-taking option: skip its value so "--sql daemon" is not misdetected
+            }
+        }
+        return -1;
+    }
+
+    private static void configureDaemonHttp(String[] args, int daemonIndex) {
         String host = "localhost";
         boolean allowRemote = false;
-        for (int i = 1; i < args.length; i++) {
+        for (int i = daemonIndex + 1; i < args.length; i++) {
             String arg = args[i];
             if ("--port".equals(arg) && i + 1 < args.length) {
                 System.setProperty("quarkus.http.port", args[i + 1]);
@@ -59,6 +90,10 @@ public class JdbcExportApplication implements QuarkusApplication {
                 allowRemote = true;
             }
         }
+        if (host == null || host.isBlank()) {
+            // An empty quarkus.http.host means bind-all to the HTTP layer; fall back to loopback.
+            host = "localhost";
+        }
         if (!isLoopbackHost(host) && !allowRemote) {
             System.err.printf(
                 "Refusing to bind the unauthenticated dashboard to non-loopback host '%s'. "
@@ -70,13 +105,23 @@ public class JdbcExportApplication implements QuarkusApplication {
 
     static boolean isLoopbackHost(String host) {
         if (host == null || host.isBlank()) {
+            // configureDaemonHttp substitutes the loopback default before binding.
             return true;
         }
-        String normalized = host.trim().toLowerCase();
-        return normalized.equals("localhost")
-            || normalized.equals("::1")
-            || normalized.equals("[::1]")
-            || normalized.startsWith("127.");
+        String normalised = host.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalised.equals("localhost")) {
+            return true;
+        }
+        if (normalised.startsWith("[") && normalised.endsWith("]")) {
+            normalised = normalised.substring(1, normalised.length() - 1);
+        }
+        try {
+            // Literal parse only — never a DNS lookup — so a hostname spelt like
+            // "127.evil.example" cannot masquerade as loopback.
+            return java.net.InetAddress.ofLiteral(normalised).isLoopbackAddress();
+        } catch (IllegalArgumentException notAnIpLiteral) {
+            return false;
+        }
     }
 
     @Override

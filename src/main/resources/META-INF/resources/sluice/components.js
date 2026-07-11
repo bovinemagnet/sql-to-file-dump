@@ -1,4 +1,6 @@
-/* Sluice — shared render components. Plain functions returning HTML strings. */
+/* Sluice — shared render components. Plain functions returning HTML strings.
+ * Convention: components escape their own inputs (esc()/escAttr() from app.js),
+ * so callers pass RAW values — do not pre-escape arguments. */
 
 function icon(name, cls) { return `<span class="icon ${cls || ''}">${name}</span>`; }
 
@@ -18,20 +20,20 @@ function statusPill(status) {
   return `<span class="st st--${m.c}">${inner}${m.lab}</span>`;
 }
 
-function formatPill(fmt) { return `<span class="fmt fmt--${fmt}">${fmt}</span>`; }
+function formatPill(fmt) { return `<span class="fmt fmt--${escAttr(fmt)}">${esc(fmt)}</span>`; }
 
 function driverBadge(driver) {
-  return `<span class="drv drv--${driver}"><i class="d"></i>${driver}</span>`;
+  return `<span class="drv drv--${escAttr(driver)}"><i class="d"></i>${esc(driver)}</span>`;
 }
 
 /* KPI tile (reuses rf-desktop .kpi) */
 function kpiTile(o) {
   const delta = o.delta
-    ? `<div class="kpi__d ${o.deltaDir || 'up'}">${icon(o.deltaDir === 'down' ? 'trending_down' : 'trending_up')}${o.delta}</div>`
-    : (o.sub ? `<div class="kpi__d up" style="color:var(--dim)">${o.sub}</div>` : '');
+    ? `<div class="kpi__d ${o.deltaDir || 'up'}">${icon(o.deltaDir === 'down' ? 'trending_down' : 'trending_up')}${esc(o.delta)}</div>`
+    : (o.sub ? `<div class="kpi__d up" style="color:var(--dim)">${esc(o.sub)}</div>` : '');
   return `<div class="kpi">
-    <div class="kpi__k">${icon(o.ic)}${o.k}</div>
-    <div class="kpi__v"><b class="num" ${o.id ? `id="${o.id}"` : ''}>${o.v}</b>${o.unit ? `<i>${o.unit}</i>` : ''}</div>
+    <div class="kpi__k">${icon(o.ic)}${esc(o.k)}</div>
+    <div class="kpi__v"><b class="num" ${o.id ? `id="${escAttr(o.id)}"` : ''}>${esc(o.v)}</b>${o.unit ? `<i>${esc(o.unit)}</i>` : ''}</div>
     ${delta}
   </div>`;
 }

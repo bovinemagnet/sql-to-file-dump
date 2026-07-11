@@ -42,6 +42,8 @@ public class ConnectionStore {
     Optional<String> configuredPath;
 
     private Path file;
+    /** Set when a corrupt file could not be quarantined; save() then refuses to clobber it. */
+    private volatile boolean saveBlocked;
     private final Map<String, SavedConnection> connections = new LinkedHashMap<>();
     private final Map<String, Status> statuses = new ConcurrentHashMap<>();
     private final Object lock = new Object();
@@ -169,15 +171,37 @@ public class ConnectionStore {
                     connections.put(c.id(), c);
                 }
             } catch (IOException e) {
-                // A corrupt or unreadable file must not stop the daemon; start empty.
-                System.err.println("sluice: could not read " + file + ": " + e.getMessage());
+                // A corrupt or unreadable file must not stop the daemon, but it must not be
+                // silently overwritten by the next save() either: quarantine it so the
+                // operator's data survives, and start empty.
+                quarantine(e);
             }
+        }
+    }
+
+    private void quarantine(IOException cause) {
+        Path bad = file.resolveSibling(file.getFileName() + ".bad-" + System.currentTimeMillis());
+        try {
+            Files.move(file, bad);
+            System.err.println("sluice: could not read " + file + " (" + cause.getMessage()
+                + "); the file has been quarantined as " + bad
+                + " and the store starts empty. Repair and restore it manually.");
+        } catch (IOException moveFailure) {
+            saveBlocked = true;
+            System.err.println("sluice: could not read " + file + " (" + cause.getMessage()
+                + ") and could not quarantine it (" + moveFailure.getMessage()
+                + "); refusing to overwrite it until the file is repaired or removed.");
         }
     }
 
     private void save() {
         if (file == null) {
             return;
+        }
+        if (saveBlocked) {
+            throw new ExportException(ExitCodes.OUTPUT_WRITE_ERROR,
+                "Refusing to overwrite " + file + ": it could not be read at startup and could not be "
+                    + "quarantined. Repair or remove the file, then restart the daemon.");
         }
         try {
             Path parent = file.getParent();

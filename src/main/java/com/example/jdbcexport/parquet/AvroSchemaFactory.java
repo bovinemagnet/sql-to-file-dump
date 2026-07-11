@@ -48,7 +48,7 @@ public final class AvroSchemaFactory {
                     "Duplicate Parquet field name detected after Avro sanitization: " + fieldName + ". Use explicit SQL aliases.");
             }
             fieldNames.add(fieldName);
-            Schema fieldSchema = canonical ? toCanonicalSchema(column.jdbcType()) : toAvroSchema(column.jdbcType());
+            Schema fieldSchema = canonical ? toCanonicalSchema(column.jdbcType()) : toAvroSchema(column);
             fields.name(fieldName)
                 .type(nullable(fieldSchema))
                 .withDefault(null);
@@ -72,8 +72,22 @@ public final class AvroSchemaFactory {
         return Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), schema));
     }
 
-    private static Schema toAvroSchema(int jdbcType) {
-        return switch (jdbcType) {
+    /**
+     * Whether the fast path stores this column with the Avro decimal logical type.
+     * Requires driver-reported precision/scale that satisfy Avro's decimal rules
+     * (precision >= 1, 0 <= scale <= precision); otherwise the column falls back to
+     * the lossless string form. {@link AvroValueMapper} keys off the same check so
+     * the schema and the written values always agree.
+     */
+    public static boolean usesDecimalLogicalType(ResultSetColumn column) {
+        return (column.jdbcType() == Types.DECIMAL || column.jdbcType() == Types.NUMERIC)
+            && column.precision() >= 1
+            && column.scale() >= 0
+            && column.scale() <= column.precision();
+    }
+
+    private static Schema toAvroSchema(ResultSetColumn column) {
+        return switch (column.jdbcType()) {
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
             case Types.BIGINT -> Schema.create(Schema.Type.LONG);
             case Types.REAL -> Schema.create(Schema.Type.FLOAT);
@@ -83,6 +97,9 @@ public final class AvroSchemaFactory {
             case Types.TIMESTAMP -> LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
             case Types.TIMESTAMP_WITH_TIMEZONE -> LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.BLOB -> Schema.create(Schema.Type.BYTES);
+            case Types.DECIMAL, Types.NUMERIC -> usesDecimalLogicalType(column)
+                ? LogicalTypes.decimal(column.precision(), column.scale()).addToSchema(Schema.create(Schema.Type.BYTES))
+                : Schema.create(Schema.Type.STRING);
             default -> Schema.create(Schema.Type.STRING);
         };
     }

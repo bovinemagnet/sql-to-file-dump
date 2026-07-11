@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -96,6 +98,43 @@ class AvroValueMapperTest {
     }
 
     @Test
+    void decimalMapsToUnscaledTwosComplementBytes() throws Exception {
+        // Issue #22: DECIMAL(12,2) must map to the unscaled bytes the decimal logical
+        // type requires, not a plain string.
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT 123.45::DECIMAL(12,2) AS c")) {
+            rs.next();
+            Object value = AvroValueMapper.readValue(rs, decimalColumn(12, 2));
+            assertThat(value).isEqualTo(ByteBuffer.wrap(new BigDecimal("123.45").unscaledValue().toByteArray()));
+        }
+    }
+
+    @Test
+    void decimalRescalesToDeclaredScale() throws Exception {
+        // A driver may hand back a scale-stripped BigDecimal (e.g. 5 for DECIMAL(12,2));
+        // the bytes must still encode the declared scale (500 at scale 2).
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT 5::DECIMAL(3,0) AS c")) {
+            rs.next();
+            Object value = AvroValueMapper.readValue(rs, decimalColumn(12, 2));
+            assertThat(value).isEqualTo(ByteBuffer.wrap(new BigDecimal("5.00").unscaledValue().toByteArray()));
+        }
+    }
+
+    @Test
+    void decimalWithoutUsablePrecisionKeepsStringForm() throws Exception {
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT 123.45::DECIMAL(12,2) AS c")) {
+            rs.next();
+            Object value = AvroValueMapper.readValue(rs, decimalColumn(0, 0));
+            assertThat(value).hasToString("123.45");
+        }
+    }
+
+    @Test
     void floatTypeMapsAtDoublePrecision() throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
              Statement statement = connection.createStatement();
@@ -108,5 +147,9 @@ class AvroValueMapperTest {
 
     private static ResultSetColumn column(int jdbcType, String typeName) {
         return new ResultSetColumn(1, "c", "c", jdbcType, typeName, 0, 0, true);
+    }
+
+    private static ResultSetColumn decimalColumn(int precision, int scale) {
+        return new ResultSetColumn(1, "c", "c", Types.DECIMAL, "DECIMAL", precision, scale, true);
     }
 }

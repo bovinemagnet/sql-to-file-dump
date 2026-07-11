@@ -146,6 +146,23 @@ class DuckDbExportIntegrationTest {
     }
 
     @Test
+    void exportsDecimalToParquetAsDecimalLogicalType(@TempDir Path tempDir) throws Exception {
+        // Issue #22: NUMERIC(12,2) must arrive downstream as a real decimal column so
+        // aggregation and numeric sort order work without casts.
+        Path output = tempDir.resolve("decimal.parquet");
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT booking_id, amount FROM bookings ORDER BY booking_id");
+
+        try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = verifyConnection.createStatement();
+             var resultSet = statement.executeQuery(
+                 "SELECT typeof(amount), SUM(amount)::VARCHAR FROM read_parquet('" + output.toAbsolutePath() + "') GROUP BY typeof(amount)")) {
+            resultSet.next();
+            assertThat(resultSet.getString(1)).isEqualTo("DECIMAL(12,2)");
+            assertThat(resultSet.getString(2)).isEqualTo("580.23");
+        }
+    }
+
+    @Test
     void exportsNonAsciiAliasToParquet(@TempDir Path tempDir) throws Exception {
         // Issue #23: a legal SQL alias like "café" must sanitise to a valid Avro name
         // rather than blowing up in Avro's Schema name validation.

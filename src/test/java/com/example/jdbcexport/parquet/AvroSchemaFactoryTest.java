@@ -40,6 +40,24 @@ class AvroSchemaFactoryTest {
     }
 
     @Test
+    void decimalUsesDecimalLogicalType() {
+        // Issue #22: NUMERIC(12,2) must carry decimal(12,2), not fall through to string.
+        ResultSetColumn column = new ResultSetColumn(1, "c", "c", Types.NUMERIC, "NUMERIC", 12, 2, true);
+        Schema field = nonNullFieldSchema(column);
+        assertThat(field.getType()).isEqualTo(Schema.Type.BYTES);
+        assertThat(field.getLogicalType()).isEqualTo(LogicalTypes.decimal(12, 2));
+    }
+
+    @Test
+    void decimalWithoutUsablePrecisionFallsBackToString() {
+        // Some drivers report precision 0 for unconstrained NUMBER/NUMERIC; a decimal
+        // logical type cannot be built from that, so keep the lossless string form.
+        ResultSetColumn column = new ResultSetColumn(1, "c", "c", Types.NUMERIC, "NUMERIC", 0, 0, true);
+        Schema field = nonNullFieldSchema(column);
+        assertThat(field.getType()).isEqualTo(Schema.Type.STRING);
+    }
+
+    @Test
     void nonAsciiAliasSanitizesToValidAvroName() {
         ResultSetColumn column = new ResultSetColumn(1, "café", "café", Types.VARCHAR, "VARCHAR", 0, 0, true);
         Schema schema = AvroSchemaFactory.buildSchema(List.of(column)).schema();
@@ -57,7 +75,10 @@ class AvroSchemaFactoryTest {
     }
 
     private static Schema nonNullFieldSchema(int jdbcType, String typeName) {
-        ResultSetColumn column = new ResultSetColumn(1, "c", "c", jdbcType, typeName, 0, 0, true);
+        return nonNullFieldSchema(new ResultSetColumn(1, "c", "c", jdbcType, typeName, 0, 0, true));
+    }
+
+    private static Schema nonNullFieldSchema(ResultSetColumn column) {
         Schema schema = AvroSchemaFactory.buildSchema(List.of(column)).schema();
         Schema fieldSchema = schema.getField("c").schema();
         // Fields are a nullable union [null, X]; return the non-null branch.

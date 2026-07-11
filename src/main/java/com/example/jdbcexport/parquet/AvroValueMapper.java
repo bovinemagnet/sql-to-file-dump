@@ -4,6 +4,7 @@ import com.example.jdbcexport.jdbc.ResultSetColumn;
 import org.apache.avro.util.Utf8;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.sql.Date;
 import java.sql.ResultSet;
@@ -90,7 +91,17 @@ public final class AvroValueMapper {
             }
             case Types.DECIMAL, Types.NUMERIC -> {
                 BigDecimal value = rs.getBigDecimal(index);
-                yield value == null ? null : new Utf8(value.toPlainString());
+                if (value == null) {
+                    yield null;
+                }
+                if (!AvroSchemaFactory.usesDecimalLogicalType(column)) {
+                    yield new Utf8(value.toPlainString());
+                }
+                // Decimal logical type: unscaled two's-complement bytes at the declared
+                // scale. Rescaling is exact (drivers may strip trailing zeros); a value
+                // that genuinely exceeds the declared scale must fail, not round silently.
+                yield ByteBuffer.wrap(value.setScale(column.scale(), RoundingMode.UNNECESSARY)
+                    .unscaledValue().toByteArray());
             }
             default -> {
                 String value = rs.getString(index);

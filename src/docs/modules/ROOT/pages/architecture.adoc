@@ -101,8 +101,8 @@ For full details on running and using the daemon, see xref:daemon-dashboard.adoc
 == Known limitations
 
 * SQL parameters (prepared-statement placeholders) are not supported; all values must be embedded in the SQL text.
-* `DECIMAL` and `NUMERIC` columns are stored as strings in Parquet output.
-  This avoids precision and scale issues with the Avro decimal logical type; native decimal support is a future enhancement.
+* `DECIMAL` and `NUMERIC` columns are mapped to the Avro `decimal` logical type in Parquet output (bytes carrying the unscaled two's-complement value with the driver-reported precision and scale).
+  If the driver reports an unusable precision or scale (precision less than 1, scale less than 0, or scale greater than precision — for example, an unconstrained Oracle `NUMBER`), the column falls back to the lossless string form. When a transform pipeline is active, decimals are still written as canonical strings.
 * No cloud object storage output targets (Amazon S3, Azure Blob Storage, Google Cloud Storage).
 * No parallel or partitioned exports; the pipeline is single-threaded per job.
 * Native image compilation (GraalVM) is not guaranteed and has not been tested.

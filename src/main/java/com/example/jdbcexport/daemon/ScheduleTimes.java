@@ -65,7 +65,18 @@ final class ScheduleTimes {
             case "day", "days" -> ChronoUnit.DAYS;
             default -> null;
         };
-        return unit == null ? Optional.empty() : Optional.of(from.plus(s.every(), unit));
+        if (unit == null) {
+            return Optional.empty();
+        }
+        // Anchor to the grid of due times (createdAt + k * every), not to the actual
+        // last-run time: a run fired late must not drift every subsequent run later
+        // (issue #33b). If runs were missed, this lands on the next grid point after
+        // {@code from}, so at most one catch-up run fires instead of a burst.
+        Instant anchor = s.createdAt() != null ? s.createdAt() : from;
+        long stepMillis = Duration.of(s.every(), unit).toMillis();
+        long sinceAnchor = Duration.between(anchor, from).toMillis();
+        long steps = sinceAnchor < 0 ? 0 : sinceAnchor / stepMillis + 1;
+        return Optional.of(anchor.plusMillis(steps * stepMillis));
     }
 
     static Optional<Instant> parseOnce(String at, ZoneId zone) {

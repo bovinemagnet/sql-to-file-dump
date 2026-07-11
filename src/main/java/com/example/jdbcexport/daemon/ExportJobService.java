@@ -43,9 +43,26 @@ public class ExportJobService {
 
     private static final int DEFAULT_FETCH_SIZE = 1000;
 
+    /**
+     * How many finished (completed or failed) jobs are retained for the dashboard's
+     * history. Without a cap, a schedule firing every minute grows the in-memory
+     * registry until the daemon runs out of heap. RUNNING/QUEUED jobs are never evicted.
+     */
+    private static final int DEFAULT_MAX_FINISHED_JOBS = 200;
+
     private final Map<String, ExportJob> jobs = new ConcurrentHashMap<>();
     private final AtomicLong sequence = new AtomicLong();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final int maxFinishedJobs;
+
+    public ExportJobService() {
+        this(DEFAULT_MAX_FINISHED_JOBS);
+    }
+
+    /** Test constructor: explicit finished-job retention cap. */
+    ExportJobService(int maxFinishedJobs) {
+        this.maxFinishedJobs = maxFinishedJobs;
+    }
 
     public ExportJob submit(ExportJobRequest request) {
         String resolvedPassword = validate(request);
@@ -59,11 +76,20 @@ public class ExportJobService {
     public DaemonMetrics metrics() {
         var heap = java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
         long uptime = java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime();
-        long running = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.RUNNING).count();
-        long queued = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.QUEUED).count();
-        long completed = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.COMPLETED).count();
-        long failed = jobs.values().stream().filter(j -> j.getStatus() == ExportJob.Status.FAILED).count();
-        long rowsTotal = jobs.values().stream().mapToLong(ExportJob::getRowCount).sum();
+        long running = 0;
+        long queued = 0;
+        long completed = 0;
+        long failed = 0;
+        long rowsTotal = 0;
+        for (ExportJob job : jobs.values()) {
+            switch (job.getStatus()) {
+                case RUNNING -> running++;
+                case QUEUED -> queued++;
+                case COMPLETED -> completed++;
+                case FAILED -> failed++;
+            }
+            rowsTotal += job.getRowCount();
+        }
         return new DaemonMetrics(heap.getUsed(), heap.getMax(), uptime,
             jobs.size(), running, queued, completed, failed, rowsTotal);
     }
@@ -164,6 +190,22 @@ public class ExportJobService {
             if (pipeline != null && !pipeline.isEmpty()) {
                 recordTransformMetrics(job, request, pipeline);
             }
+            evictFinishedJobs();
+        }
+    }
+
+    /**
+     * Bounds the in-memory history: keeps the {@code maxFinishedJobs} most recent
+     * finished jobs and drops the rest. RUNNING/QUEUED jobs are never touched.
+     * Evicted jobs disappear from the dashboard job list and return 404 on lookup.
+     */
+    private void evictFinishedJobs() {
+        List<ExportJob> finished = jobs.values().stream()
+            .filter(ExportJob::isFinished)
+            .sorted(Comparator.comparingLong((ExportJob job) -> Long.parseLong(job.getId())))
+            .toList();
+        for (int i = 0; i < finished.size() - maxFinishedJobs; i++) {
+            jobs.remove(finished.get(i).getId());
         }
     }
 

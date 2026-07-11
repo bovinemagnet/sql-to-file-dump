@@ -157,6 +157,36 @@ class ExportJobServiceTest {
     }
 
     @Test
+    void evictsOldestFinishedJobsBeyondCap(@TempDir Path tempDir) {
+        ExportJobService capped = new ExportJobService(3);
+        for (int i = 1; i <= 5; i++) {
+            ExportJob job = capped.submit(request("SELECT " + i + " AS a", tempDir.resolve("cap-" + i + ".csv")));
+            awaitFinished(job);
+        }
+
+        assertThat(capped.jobs()).extracting(ExportJob::getId).containsExactly("5", "4", "3");
+        assertThat(capped.find("1")).isEmpty();
+        assertThat(capped.find("2")).isEmpty();
+        assertThat(capped.find("5")).isPresent();
+    }
+
+    @Test
+    void metricsReflectEvictedRegistry(@TempDir Path tempDir) {
+        ExportJobService capped = new ExportJobService(2);
+        for (int i = 1; i <= 4; i++) {
+            awaitFinished(capped.submit(request("SELECT " + i + " AS a", tempDir.resolve("m-" + i + ".csv"))));
+        }
+
+        ExportJobService.DaemonMetrics metrics = capped.metrics();
+        assertThat(metrics.jobsTotal()).isEqualTo(2);
+        assertThat(metrics.completed()).isEqualTo(2);
+        assertThat(metrics.running()).isZero();
+        assertThat(metrics.queued()).isZero();
+        assertThat(metrics.failed()).isZero();
+        assertThat(metrics.rowsTotal()).isEqualTo(2);
+    }
+
+    @Test
     void describeReturnsColumns(@TempDir Path tempDir) {
         List<ResultSetColumn> columns = service.describe(request("SELECT 1 AS a, 'x' AS b", tempDir.resolve("ignored.csv")));
 

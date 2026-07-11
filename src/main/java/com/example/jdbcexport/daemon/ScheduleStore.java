@@ -169,11 +169,21 @@ public class ScheduleStore {
             s.unit(), s.at(), s.createdAt(), lastRunAt, lastStatus, lastJobId);
     }
 
+    /** Lower-cased names of the supported output formats; the format is rendered in the dashboard. */
+    private static final java.util.Set<String> SUPPORTED_FORMATS =
+        java.util.Arrays.stream(com.example.jdbcexport.cli.OutputFormat.values())
+            .map(f -> f.name().toLowerCase(java.util.Locale.ROOT))
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
     private void validate(Schedule s) {
         require(s.name(), "Schedule name is required.");
         require(s.connectionId(), "A saved connection is required.");
         require(s.sql(), "SQL is required.");
         require(s.outputPattern(), "Output path pattern is required.");
+        if (!SUPPORTED_FORMATS.contains(s.format())) {
+            throw new ExportException(ExitCodes.INVALID_ARGUMENTS,
+                "Unsupported format: use one of " + String.join(", ", SUPPORTED_FORMATS.stream().sorted().toList()) + ".");
+        }
         String triggerError = ScheduleTimes.validate(s);
         if (triggerError != null) {
             throw new ExportException(ExitCodes.INVALID_ARGUMENTS, triggerError);

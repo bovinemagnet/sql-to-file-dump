@@ -110,6 +110,27 @@ class ConnectionStoreTest {
     }
 
     @Test
+    void rejectsDriverWithUnsafeCharacters(@TempDir Path dir) {
+        ConnectionStore store = store(dir);
+        // The driver value is rendered in the dashboard, so it must stay within a safe charset.
+        assertThatThrownBy(() -> store.create("n", "<script>alert(1)</script>", "jdbc:postgresql://h/db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+        assertThatThrownBy(() -> store.create("n", "post gres", "jdbc:postgresql://h/db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+        // A driver derived from a hostile URL is validated the same way.
+        assertThatThrownBy(() -> store.create("n", "", "jdbc:p<img src=x>g:db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+    }
+
+    @Test
+    void rejectsUnsafeDriverOnUpdate(@TempDir Path dir) {
+        ConnectionStore store = store(dir);
+        SavedConnection conn = store.create("n", "postgres", "jdbc:postgresql://h/db", "u", null);
+        assertThatThrownBy(() -> store.update(conn.id(), "n", "\"onload=x", "jdbc:postgresql://h/db", "u", null))
+            .isInstanceOf(ExportException.class).hasMessageContaining("driver");
+    }
+
+    @Test
     void rejectsMissingRequiredFields(@TempDir Path dir) {
         ConnectionStore store = store(dir);
         assertThatThrownBy(() -> store.create("", "postgres", "jdbc:postgresql://h/db", "u", null))

@@ -150,8 +150,21 @@ public class ConnectionStore {
         }
     }
 
+    /**
+     * The driver is rendered in the dashboard (badges, CSS class names), so whether it
+     * comes from the form or is derived from the JDBC URL it must stay within a safe
+     * charset. The UI offers a fixed list, but any JDBC subprotocol is legitimate here.
+     */
+    private static final java.util.regex.Pattern SAFE_DRIVER =
+        java.util.regex.Pattern.compile("[a-z0-9._-]{1,64}");
+
     private static String resolveDriver(String driver, String url) {
-        return isBlank(driver) ? ExportJob.driverOf(url) : driver.trim().toLowerCase(java.util.Locale.ROOT);
+        String resolved = isBlank(driver) ? ExportJob.driverOf(url) : driver.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!SAFE_DRIVER.matcher(resolved).matches()) {
+            throw new ExportException(ExitCodes.INVALID_ARGUMENTS,
+                "Invalid driver: only lower-case letters, digits, '.', '_' and '-' are allowed.");
+        }
+        return resolved;
     }
 
     private void load() {

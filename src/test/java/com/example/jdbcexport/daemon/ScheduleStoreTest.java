@@ -47,6 +47,28 @@ class ScheduleStoreTest {
     }
 
     @Test
+    void rejectsUnsupportedFormat(@TempDir Path dir) {
+        ScheduleStore store = store(dir);
+        // The format is rendered in the dashboard and drives the writer: whitelist it.
+        assertThatThrownBy(() -> store.create(new Schedule(null, "n", true, "conn-1", "select 1 as a",
+            "html", null, "o_{date}.html", true, "cron", "0 2 * * *", null, null, null, null, null, null, null)))
+            .isInstanceOf(ExportException.class).hasMessageContaining("format");
+        assertThatThrownBy(() -> store.create(new Schedule(null, "n", true, "conn-1", "select 1 as a",
+            "csv<script>", null, "o_{date}.csv", true, "cron", "0 2 * * *", null, null, null, null, null, null, null)))
+            .isInstanceOf(ExportException.class).hasMessageContaining("format");
+    }
+
+    @Test
+    void acceptsAllSupportedFormatsCaseInsensitively(@TempDir Path dir) {
+        ScheduleStore store = store(dir);
+        for (String format : new String[] {"csv", "TSV", "json", "NDJSON", "parquet"}) {
+            Schedule s = store.create(new Schedule(null, "n-" + format, true, "conn-1", "select 1 as a",
+                format, null, "o_{date}.out", true, "cron", "0 2 * * *", null, null, null, null, null, null, null));
+            assertThat(s.format()).isEqualTo(format.toLowerCase());
+        }
+    }
+
+    @Test
     void persistsAcrossInstances(@TempDir Path dir) throws Exception {
         ScheduleStore store = store(dir);
         Schedule s = store.create(draft("hourly", "cron", "0 * * * *"));

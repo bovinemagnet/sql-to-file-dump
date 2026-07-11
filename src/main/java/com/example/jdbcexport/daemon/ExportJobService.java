@@ -17,6 +17,7 @@ import com.example.jdbcexport.transform.TransformPipeline;
 import com.example.jdbcexport.transform.TransformRegistry;
 import com.example.jdbcexport.transform.metrics.TransformMetricsPublisher;
 import com.example.jdbcexport.transform.metrics.TransformMetricsSettings;
+import com.example.jdbcexport.writer.AtomicRowWriter;
 import com.example.jdbcexport.writer.RowWriter;
 import com.example.jdbcexport.writer.RowWriterFactory;
 import io.micrometer.core.instrument.Metrics;
@@ -153,6 +154,9 @@ public class ExportJobService {
                 request.format(), request.output(), DEFAULT_FETCH_SIZE, null, null,
                 request.overwrite(), false, false, false, false, true, "", request.parquetCompression());
             try (RowWriter writer = new RowWriterFactory().create(options, outputColumns, transforming)) {
+                if (writer instanceof AtomicRowWriter atomic) {
+                    job.recordWritePath(atomic.temporaryPath().toString());
+                }
                 JdbcExporter.ExportResult result =
                     new JdbcExporter().export(connection, request.sql(), DEFAULT_FETCH_SIZE, null, writer,
                         job::recordProgress, columns, pipeline);

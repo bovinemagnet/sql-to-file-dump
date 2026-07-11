@@ -35,6 +35,19 @@ class JdbcExportCommandValidationTest {
     }
 
     @Test
+    void dryRunCreatesNoFilesOrDirectories(@TempDir Path tempDir) {
+        // Issue #24: --dry-run must validate only — no output or metadata directories on disk.
+        JdbcExportCommand command = validCommand(tempDir);
+        command.output = tempDir.resolve("exports/nested/out.csv").toString();
+        command.metadata = tempDir.resolve("meta/out.metadata.json").toString();
+        command.dryRun = true;
+
+        assertThat(command.call()).isEqualTo(ExitCodes.SUCCESS);
+        assertThat(tempDir.resolve("exports")).doesNotExist();
+        assertThat(tempDir.resolve("meta")).doesNotExist();
+    }
+
+    @Test
     void failsWhenBothSqlAndSqlFileSupplied(@TempDir Path tempDir) {
         JdbcExportCommand command = validCommand(tempDir);
         command.sqlFile = "query.sql";

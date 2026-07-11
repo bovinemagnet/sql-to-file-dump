@@ -33,6 +33,7 @@ public final class ExportJob {
     private volatile Instant startedAt;
     private volatile Instant completedAt;
     private volatile long rowCount;
+    private volatile String writePath;
     private volatile int columnCount;
     private volatile String serverInfo;
     private volatile String error;
@@ -73,6 +74,11 @@ public final class ExportJob {
 
     void recordProgress(long rows) {
         rowCount = rows;
+    }
+
+    /** Records the temporary file being streamed to, so live output bytes stay real (issue #24). */
+    void recordWritePath(String path) {
+        writePath = path;
     }
 
     void recordSchema(int columns, String server) {
@@ -218,13 +224,17 @@ public final class ExportJob {
         return elapsed > 0 ? rowCount * 1000.0 / elapsed : 0.0;
     }
 
-    /** Current size of the output file on disk, or 0 if it does not exist yet. */
+    /**
+     * Current size of the output file on disk, or 0 if it does not exist yet. While the job is
+     * running the export streams to a temporary file (issue #24), so that file is measured instead.
+     */
     public long getOutputBytes() {
-        if (output == null) {
+        String measured = status == Status.RUNNING && writePath != null ? writePath : output;
+        if (measured == null) {
             return 0L;
         }
         try {
-            Path path = Path.of(output);
+            Path path = Path.of(measured);
             return Files.exists(path) ? Files.size(path) : 0L;
         } catch (Exception e) {
             return 0L;

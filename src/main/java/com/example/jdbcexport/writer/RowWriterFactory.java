@@ -18,13 +18,17 @@ public final class RowWriterFactory {
      *                     rows via {@link RowWriter#writeRow(com.example.jdbcexport.transform.Row)}.
      */
     public RowWriter create(ExportOptions options, List<ResultSetColumn> columns, boolean transforming) {
-        Path outputPath = Path.of(options.output());
-        return switch (options.format()) {
-            case JSON -> new JsonArrayRowWriter(outputPath, options.pretty(), columns);
-            case NDJSON -> new NdjsonRowWriter(outputPath, columns);
-            case CSV -> new CsvRowWriter(outputPath, columns, options.includeHeader(), options.nullValue());
-            case TSV -> new TsvRowWriter(outputPath, columns, options.includeHeader(), options.nullValue());
-            case PARQUET -> new ParquetRowWriter(outputPath, columns, options.parquetCompression(), transforming);
+        Path targetPath = Path.of(options.output());
+        // Issue #24: stream to a temporary sibling and rename onto the target only on success,
+        // so a mid-stream failure never leaves a truncated file or destroys an existing export.
+        Path temporaryPath = AtomicRowWriter.temporaryPathFor(targetPath);
+        RowWriter delegate = switch (options.format()) {
+            case JSON -> new JsonArrayRowWriter(temporaryPath, options.pretty(), columns);
+            case NDJSON -> new NdjsonRowWriter(temporaryPath, columns);
+            case CSV -> new CsvRowWriter(temporaryPath, columns, options.includeHeader(), options.nullValue());
+            case TSV -> new TsvRowWriter(temporaryPath, columns, options.includeHeader(), options.nullValue());
+            case PARQUET -> new ParquetRowWriter(temporaryPath, columns, options.parquetCompression(), transforming);
         };
+        return new AtomicRowWriter(delegate, temporaryPath, targetPath);
     }
 }

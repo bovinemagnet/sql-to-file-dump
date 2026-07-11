@@ -161,6 +161,8 @@ public class JdbcExportCommand implements Callable<Integer> {
             return;
         }
 
+        prepareOutputDirectories();
+
         if (verbose) {
             LOG.info(() -> "Connecting to " + url);
         }
@@ -281,25 +283,27 @@ public class JdbcExportCommand implements Callable<Integer> {
         }
     }
 
-    private void validatePaths() throws Exception {
+    private void validatePaths() {
+        if (output != null && Files.exists(Path.of(output)) && !overwrite) {
+            throw new ExportException(ExitCodes.OUTPUT_WRITE_ERROR,
+                "Output file already exists: " + output + ". Use --overwrite to replace it.");
+        }
+        if (metadata != null && Files.exists(Path.of(metadata)) && !overwrite) {
+            throw new ExportException(ExitCodes.OUTPUT_WRITE_ERROR,
+                "Metadata file already exists: " + metadata + ". Use --overwrite to replace it.");
+        }
+    }
+
+    /** Creates parent directories for the output paths. Never called for --dry-run (issue #24). */
+    private void prepareOutputDirectories() throws Exception {
         if (output != null) {
-            Path outputPath = Path.of(output);
-            if (Files.exists(outputPath) && !overwrite) {
-                throw new ExportException(ExitCodes.OUTPUT_WRITE_ERROR,
-                    "Output file already exists: " + output + ". Use --overwrite to replace it.");
-            }
-            Path parent = outputPath.getParent();
+            Path parent = Path.of(output).getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
         }
         if (metadata != null) {
-            Path metadataPath = Path.of(metadata);
-            if (Files.exists(metadataPath) && !overwrite) {
-                throw new ExportException(ExitCodes.OUTPUT_WRITE_ERROR,
-                    "Metadata file already exists: " + metadata + ". Use --overwrite to replace it.");
-            }
-            Path parent = metadataPath.getParent();
+            Path parent = Path.of(metadata).getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }

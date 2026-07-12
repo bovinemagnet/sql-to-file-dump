@@ -7,12 +7,19 @@ import com.example.jdbcexport.jdbc.JdbcExporter;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.example.jdbcexport.jdbc.ResultSetSchemaReader;
 import com.example.jdbcexport.transform.ErrorStrategy;
+import com.example.jdbcexport.transform.OutboundTransformer;
 import com.example.jdbcexport.transform.TransformConfig;
+import com.example.jdbcexport.transform.TransformContext;
+import com.example.jdbcexport.transform.TransformInput;
 import com.example.jdbcexport.transform.TransformPipeline;
 import com.example.jdbcexport.transform.TransformRegistry;
+import com.example.jdbcexport.transform.TransformResult;
 import com.example.jdbcexport.transform.TransformSpec;
+import com.example.jdbcexport.transform.builtin.MaskTransform;
 import com.example.jdbcexport.writer.RowWriter;
 import com.example.jdbcexport.writer.RowWriterFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,6 +36,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DuckDbTransformIntegrationTest {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @BeforeAll
     static void registerDriver() throws Exception {
@@ -120,6 +129,149 @@ class DuckDbTransformIntegrationTest {
                 .hasMessageContaining("booking_id");
         }
         assertThat(Files.exists(output)).isFalse();
+    }
+
+    // --- Issue #40 item 3: error strategy end-to-end through a real CSV writer -------------
+
+    @Test
+    void failStrategyLeavesNoOutputFileWhenATransformStepFails(@TempDir Path tempDir) throws Exception {
+        // A pipeline that masks booking_id and then fails on the B-202 room, under the default
+        // "fail" strategy: atomic output (issue #24) writes to a temp sibling and renames onto
+        // the target only on success, so even though two masked rows were already streamed to
+        // the temp file before the third row failed, the target path must never appear.
+        Path output = tempDir.resolve("fail-strategy.csv");
+        TransformPipeline pipeline = maskThenFailOnRoomPipeline(ErrorStrategy.FAIL);
+        String sql = "SELECT booking_id, room_code FROM bookings ORDER BY booking_id";
+
+        assertThatThrownBy(() -> export(output, OutputFormat.CSV, sql, pipeline))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("fail-on-room");
+
+        assertThat(output).doesNotExist();
+    }
+
+    @Test
+    void skipRowStrategyDropsTheFailingRowAndKeepsMaskedRows(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("skip-row-strategy.csv");
+        TransformPipeline pipeline = maskThenFailOnRoomPipeline(ErrorStrategy.SKIP_ROW);
+        String sql = "SELECT booking_id, room_code FROM bookings ORDER BY booking_id";
+
+        export(output, OutputFormat.CSV, sql, pipeline);
+
+        List<String> lines = Files.readAllLines(output);
+        assertThat(lines).containsExactly(
+            "booking_id,room_code",
+            "***,A-101",
+            "***,A-101");
+        assertThat(pipeline.metrics().snapshot().rowsDroppedByError()).isEqualTo(1);
+    }
+
+    @Test
+    void keepOriginalStrategyIsRejectedEvenWhenAFailingStepIsPresent(@TempDir Path tempDir) throws Exception {
+        // Same pipeline shape as the fail/skipRow tests above, but under keepOriginal the mask
+        // (issue #17) must be rejected up front regardless of whether a later step ever fails.
+        Path output = tempDir.resolve("keep-original-strategy.csv");
+        TransformPipeline pipeline = maskThenFailOnRoomPipeline(ErrorStrategy.KEEP_ORIGINAL);
+        String sql = "SELECT booking_id, room_code FROM bookings ORDER BY booking_id";
+
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
+            setupTable(connection);
+            List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, sql, 1000);
+            assertThatThrownBy(() -> pipeline.outputSchema(columns))
+                .isInstanceOf(ExportException.class)
+                .hasMessageContaining("keepOriginal")
+                .hasMessageContaining("booking_id");
+        }
+        assertThat(Files.exists(output)).isFalse();
+    }
+
+    private static TransformPipeline maskThenFailOnRoomPipeline(ErrorStrategy strategy) {
+        return new TransformPipeline(List.of(
+            new TransformPipeline.Step("mask",
+                MaskTransform.PROVIDER.create(new TransformSpec("mask", Map.of("column", "booking_id")))),
+            new TransformPipeline.Step("fail-on-room", failOnRoomCode("B-202"))
+        ), strategy);
+    }
+
+    /** A pass-through-schema transformer that fails on rows matching a specific room code. */
+    private static OutboundTransformer failOnRoomCode(String triggerRoomCode) {
+        return new OutboundTransformer() {
+            @Override
+            public String name() {
+                return "fail-on-room";
+            }
+
+            @Override
+            public List<ResultSetColumn> transformSchema(List<ResultSetColumn> columns) {
+                return columns;
+            }
+
+            @Override
+            public TransformResult transform(TransformInput input, TransformContext context) {
+                if (triggerRoomCode.equals(input.row().get("room_code"))) {
+                    throw new IllegalStateException("simulated failure for room " + triggerRoomCode);
+                }
+                return TransformResult.keep(input.row());
+            }
+        };
+    }
+
+    // --- Issue #40 item 9: fast-path vs transform-path parity for JSON, and the documented
+    // --- Parquet divergence (transform mode stores canonical strings, not native logical types) --
+
+    @Test
+    void fastPathAndTransformPathProduceEquivalentJsonValues(@TempDir Path tempDir) throws Exception {
+        Path fastPathOutput = tempDir.resolve("fast.json");
+        Path transformOutput = tempDir.resolve("transform.json");
+        String sql = "SELECT booking_id, attendees, amount, cancelled FROM bookings ORDER BY booking_id";
+
+        exportFastPath(fastPathOutput, OutputFormat.JSON, sql);
+        // A rename is not a value-only no-op, but it touches only one column's name — every other
+        // field, and the renamed field's value/type, must still match the fast path exactly.
+        TransformPipeline pipeline = pipeline(new TransformSpec("rename", Map.of("from", "attendees", "to", "attendee_count")));
+        export(transformOutput, OutputFormat.JSON, sql, pipeline);
+
+        JsonNode fastRows = MAPPER.readTree(fastPathOutput.toFile());
+        JsonNode transformRows = MAPPER.readTree(transformOutput.toFile());
+        assertThat(transformRows).hasSize(fastRows.size());
+        for (int i = 0; i < fastRows.size(); i++) {
+            JsonNode fast = fastRows.get(i);
+            JsonNode transformed = transformRows.get(i);
+            assertThat(transformed.get("booking_id")).isEqualTo(fast.get("booking_id"));
+            assertThat(transformed.get("amount")).isEqualTo(fast.get("amount"));
+            assertThat(transformed.get("cancelled")).isEqualTo(fast.get("cancelled"));
+            assertThat(transformed.get("attendee_count")).isEqualTo(fast.get("attendees"));
+        }
+    }
+
+    @Test
+    void parquetTransformPathStoresTimestampsAsCanonicalStringsUnlikeFastPath(@TempDir Path tempDir) throws Exception {
+        // Documented caveat (see CLAUDE.md): in transform mode Parquet stores temporal values as
+        // canonical strings rather than native Parquet logical types. This locks that divergence
+        // in rather than silently expecting parity with the fast path.
+        Path fastPathOutput = tempDir.resolve("fast-ts.parquet");
+        Path transformOutput = tempDir.resolve("transform-ts.parquet");
+        // A literal query, not the bookings table: setupTable() still runs (harmlessly) via the
+        // export()/exportFastPath() helpers, but the row shape here is just the timestamp itself.
+        String sql = "SELECT TIMESTAMP '2024-06-01 12:34:56' AS ts";
+
+        exportFastPath(fastPathOutput, OutputFormat.PARQUET, sql);
+        TransformPipeline pipeline = pipeline(new TransformSpec("rename", Map.of("from", "ts", "to", "ts_out")));
+        export(transformOutput, OutputFormat.PARQUET, sql, pipeline);
+
+        try (Connection verify = DriverManager.getConnection("jdbc:duckdb:");
+             Statement statement = verify.createStatement()) {
+            try (var rs = statement.executeQuery(
+                "SELECT typeof(ts) FROM read_parquet('" + fastPathOutput.toAbsolutePath() + "') LIMIT 1")) {
+                rs.next();
+                assertThat(rs.getString(1)).isEqualTo("TIMESTAMP");
+            }
+            try (var rs = statement.executeQuery(
+                "SELECT typeof(ts_out) FROM read_parquet('" + transformOutput.toAbsolutePath() + "') LIMIT 1")) {
+                rs.next();
+                assertThat(rs.getString(1)).isEqualTo("VARCHAR");
+            }
+        }
     }
 
     private static TransformPipeline pipeline(TransformSpec... specs) {

@@ -2,6 +2,7 @@ package com.example.jdbcexport.metadata;
 
 import com.example.jdbcexport.error.ExitCodes;
 import com.example.jdbcexport.error.ExportException;
+import com.example.jdbcexport.jdbc.JdbcUrlRedactor;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -29,7 +30,8 @@ public final class ExportMetadataWriter {
             ObjectNode root = mapper.createObjectNode();
             root.put("tool", metadata.tool());
             root.put("format", metadata.format());
-            root.put("jdbcUrl", metadata.jdbcUrl());
+            // Issue #30: never persist inline URL credentials to the sidecar.
+            root.put("jdbcUrl", JdbcUrlRedactor.redact(metadata.jdbcUrl()));
             root.put("sqlSource", metadata.sqlSource());
             root.put("output", metadata.output());
             root.put("rowCount", metadata.rowCount());

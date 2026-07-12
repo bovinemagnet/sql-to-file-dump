@@ -18,11 +18,14 @@ import org.apache.commons.jexl3.JexlEngine;
 import org.apache.commons.jexl3.JexlException;
 import org.apache.commons.jexl3.JexlExpression;
 import org.apache.commons.jexl3.JexlFeatures;
+import org.apache.commons.jexl3.JexlScript;
 import org.apache.commons.jexl3.MapContext;
 import org.apache.commons.jexl3.introspection.JexlPermissions;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Adds a computed string column from a small, sandboxed expression over the row's fields, e.g.
@@ -49,9 +52,14 @@ public final class ExpressionTransform implements OutboundTransformer {
         .annotation(false)
         .pragma(false);
 
+    // RESTRICTED, further denying Object.getClass() so the "class" pseudo-property (x.class) cannot
+    // hand out a Class object via property syntax — method calls are already disabled at parse time.
+    private static final JexlPermissions PERMISSIONS = JexlPermissions.RESTRICTED
+        .compose("java.lang { Object { getClass(); } }");
+
     private static final JexlEngine ENGINE = new JexlBuilder()
         .features(FEATURES)
-        .permissions(JexlPermissions.RESTRICTED)
+        .permissions(PERMISSIONS)
         .strict(true)
         .silent(false)
         .create();
@@ -71,6 +79,7 @@ public final class ExpressionTransform implements OutboundTransformer {
     private final String outputField;
     private final String source;
     private final JexlExpression expression;
+    private final Set<String> referenced = new LinkedHashSet<>();
 
     private ExpressionTransform(String outputField, String source) {
         this.outputField = outputField;
@@ -80,6 +89,15 @@ public final class ExpressionTransform implements OutboundTransformer {
         } catch (JexlException e) {
             throw new ExportException(ExitCodes.TRANSFORM_ERROR,
                 "Transform \"expression\" has an invalid expression for \"" + outputField + "\": " + e.getMessage());
+        }
+        // The compiled expression exposes its referenced variables (names only, never values). Each
+        // dotted reference like a.b arrives as a segment list; only the root names a column.
+        if (expression instanceof JexlScript script) {
+            for (List<String> variable : script.getVariables()) {
+                if (!variable.isEmpty()) {
+                    referenced.add(variable.get(0));
+                }
+            }
         }
     }
 
@@ -99,6 +117,9 @@ public final class ExpressionTransform implements OutboundTransformer {
             throw new ExportException(ExitCodes.TRANSFORM_ERROR,
                 "Transform \"expression\" would create a duplicate column \"" + outputField + "\".");
         }
+        for (String variable : referenced) {
+            TransformColumns.require(columns, variable, "expression");
+        }
         List<ResultSetColumn> result = new ArrayList<>(columns);
         result.add(TransformColumns.string(outputField));
         return result;
@@ -114,6 +135,10 @@ public final class ExpressionTransform implements OutboundTransformer {
         Object value;
         try {
             value = expression.evaluate(jexl);
+        } catch (JexlException.Variable e) {
+            // Carries the variable *name* only (no values), so it is safe to surface as-is.
+            return TransformResult.fail("expression \"" + outputField + "\" references "
+                + (e.isUndefined() ? "undefined" : "null") + " variable \"" + e.getVariable() + "\"");
         } catch (JexlException e) {
             // The JEXL message can include field values, so pass it as the cause (never surfaced).
             return TransformResult.fail("expression \"" + outputField + "\" evaluation error", e);

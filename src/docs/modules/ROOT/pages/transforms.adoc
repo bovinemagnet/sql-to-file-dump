@@ -21,6 +21,8 @@ Transforms can be specified in two ways, which can be combined. File specs run f
 * `+template:full={first} {last}+`
 * `+expression:displayName=lastName + ', ' + firstName+`
 
+NOTE: The inline shorthand reserves a few characters for its own grammar: `,` separates list items (in `drop`, `keep`, `addStatic` and `map`), `>` separates a `map` pair's key from its value, and the first `=` splits a key from its value. Column names or values containing any of these characters cannot be expressed inline — use `--transforms-file` instead, where values are plain JSON strings.
+
 *2. `--transforms-file <path>`* — pointing at a JSON document. The JSON is either a top-level array, or an object with a `"transforms"` array. Each element is an object with a `"type"` key plus that transform's config keys. A sample is available at `examples/transforms.sample.json` in the repository.
 
 [source,bash]
@@ -299,7 +301,7 @@ Metrics are also emitted to Micrometer (scrapeable at `/q/metrics` in daemon mod
 |counter
 |===
 
-The `reason` tag on dropped rows is `filtered` (a transform returned no row) or `error` (skipped under `skipRow`).
+The `status` tag reflects the export outcome: `success` when the export finished, or `error` when it failed (for example, a `fail`-strategy abort in daemon mode). The `reason` tag on dropped rows is `filtered` (a transform returned no row) or `error` (skipped under `skipRow`).
 
 Metrics are controlled by configuration, with defaults:
 

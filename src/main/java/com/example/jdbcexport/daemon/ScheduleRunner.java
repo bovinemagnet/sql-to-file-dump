@@ -12,6 +12,8 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -41,6 +43,14 @@ public class ScheduleRunner {
     boolean httpEnabled;
 
     private ScheduledExecutorService executor;
+
+    /**
+     * Last-submitted job id per schedule, guarded by {@link #fireLock}. A schedule whose
+     * job is still running is never fired again — neither by the tick nor by "Run now" —
+     * so runs cannot overlap or double-fire against the same output path (issue #33).
+     */
+    private final Map<String, String> inFlight = new HashMap<>();
+    private final Object fireLock = new Object();
 
     void onStart(@Observes StartupEvent event) {
         // Only run inside the daemon: a one-shot CLI export disables the HTTP listener,
@@ -75,7 +85,7 @@ public class ScheduleRunner {
             Optional<Instant> next = ScheduleTimes.nextFire(s, from);
             if (next.isPresent() && !next.get().isAfter(now)) {
                 try {
-                    fire(s, now);
+                    fireUnlessRunning(s, now);
                 } catch (RuntimeException e) {
                     scheduleStore.markRun(s.id(), now, null, "failed");
                 }
@@ -83,11 +93,30 @@ public class ScheduleRunner {
         }
     }
 
-    /** Run a schedule immediately (the "Run now" action). Returns the created job id. */
+    /**
+     * Run a schedule immediately (the "Run now" action). Returns the created job id,
+     * or the in-flight job id when the schedule's previous run has not finished yet.
+     */
     public String runNow(String id) {
         Schedule s = scheduleStore.get(id)
             .orElseThrow(() -> new ExportException(ExitCodes.INVALID_ARGUMENTS, "Schedule not found: " + id));
-        return fire(s, Instant.now());
+        return fireUnlessRunning(s, Instant.now());
+    }
+
+    /**
+     * Fires the schedule unless its last-submitted job is still running. The lock makes
+     * the check-then-fire atomic between the scheduler thread and API "Run now" threads.
+     */
+    private String fireUnlessRunning(Schedule s, Instant now) {
+        synchronized (fireLock) {
+            String existing = inFlight.get(s.id());
+            if (existing != null && jobService.find(existing).map(job -> !job.isFinished()).orElse(false)) {
+                return existing;
+            }
+            String jobId = fire(s, now);
+            inFlight.put(s.id(), jobId);
+            return jobId;
+        }
     }
 
     private String fire(Schedule s, Instant now) {

@@ -42,7 +42,6 @@ class PostgresExportIntegrationTest {
                 ExportOptions options = new ExportOptions(
                     postgres.getJdbcUrl(),
                     postgres.getUsername(),
-                    postgres.getPassword(),
                     sql,
                     null,
                     OutputFormat.CSV,
@@ -57,6 +56,8 @@ class PostgresExportIntegrationTest {
                     false,
                     true,
                     "",
+                    false,
+                    false,
                     "SNAPPY"
                 );
 

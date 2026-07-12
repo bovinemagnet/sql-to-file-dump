@@ -22,6 +22,16 @@ public final class ResultSetSchemaReader {
     public static List<ResultSetColumn> readColumns(Connection connection, String sql, int fetchSize) {
         try (PreparedStatement stmt = connection.prepareStatement(sql,
             ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            // Issue #31: prefer PreparedStatement.getMetaData(), which describes the statement
+            // without executing it — setMaxRows(1) limits rows returned, not work done, so the
+            // old execute-first approach ran expensive queries twice (and under READ COMMITTED
+            // the data could drift between the two executions).
+            ResultSetMetaData meta = stmt.getMetaData();
+            if (meta != null) {
+                return readColumnsFromMeta(meta);
+            }
+            // Documented fallback: some drivers cannot describe a statement before execution
+            // and return null; execute once, capped to a single returned row.
             stmt.setFetchSize(Math.max(1, fetchSize));
             stmt.setMaxRows(1);
             try (ResultSet rs = stmt.executeQuery()) {

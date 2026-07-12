@@ -116,7 +116,7 @@ function chrome(theme) {
     <div class="ochrome__lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
     <div class="ochrome__url">${icon('lock')}localhost:8080 · jdbc-export daemon</div>
     <div class="ochrome__right">
-      <span class="daemon"><i></i>Online</span>
+      <span class="daemon" id="daemonBadge"><i></i><span>Online</span></span>
       <div class="othemes" id="themeToggle">
         <button data-t="dark" class="${theme === 'dark' ? 'on' : ''}">Dark</button>
         <button data-t="light" class="${theme === 'light' ? 'on' : ''}">Light</button>

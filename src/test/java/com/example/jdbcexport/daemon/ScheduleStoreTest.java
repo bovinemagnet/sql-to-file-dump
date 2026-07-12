@@ -47,6 +47,20 @@ class ScheduleStoreTest {
     }
 
     @Test
+    void rejectsNonSelectSqlAtSave(@TempDir Path dir) {
+        ScheduleStore store = store(dir);
+        Schedule writing = new Schedule(null, "n", true, "conn-1", "DELETE FROM bookings", "csv", null,
+            "o_{date}.csv", true, "cron", "0 2 * * *", null, null, null, null, null, null, null);
+
+        assertThatThrownBy(() -> store.create(writing))
+            .isInstanceOf(ExportException.class).hasMessageContaining("SELECT");
+
+        Schedule valid = store.create(draft("n", "cron", "0 2 * * *"));
+        assertThatThrownBy(() -> store.update(valid.id(), writing))
+            .isInstanceOf(ExportException.class).hasMessageContaining("SELECT");
+    }
+
+    @Test
     void rejectsUnsupportedFormat(@TempDir Path dir) {
         ScheduleStore store = store(dir);
         // The format is rendered in the dashboard and drives the writer: whitelist it.

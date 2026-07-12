@@ -4,6 +4,7 @@ import com.example.jdbcexport.error.ExitCodes;
 import com.example.jdbcexport.error.ExportException;
 import com.example.jdbcexport.jdbc.JdbcConnectionFactory;
 import com.example.jdbcexport.jdbc.JdbcExporter;
+import com.example.jdbcexport.jdbc.JdbcUrlRedactor;
 import com.example.jdbcexport.jdbc.PasswordResolver;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.example.jdbcexport.jdbc.ResultSetSchemaReader;
@@ -103,6 +104,15 @@ public class JdbcExportCommand implements Callable<Integer> {
     @Option(names = "--null-value", description = "String to use for SQL null values in CSV/TSV", defaultValue = "")
     String nullValue;
 
+    @Option(names = "--csv-escape-formulas",
+        description = "Prefix CSV/TSV cells starting with = + - @ tab or CR with a single quote "
+            + "(OWASP formula-injection mitigation for spreadsheet applications)")
+    boolean csvEscapeFormulas;
+
+    @Option(names = "--csv-bom",
+        description = "Write a UTF-8 byte-order mark at the start of CSV/TSV output (helps Excel decode non-ASCII content)")
+    boolean csvBom;
+
     @Option(names = "--parquet-compression", description = "Parquet compression: SNAPPY, GZIP, ZSTD, UNCOMPRESSED", defaultValue = "SNAPPY")
     String parquetCompression;
 
@@ -164,7 +174,8 @@ public class JdbcExportCommand implements Callable<Integer> {
         prepareOutputDirectories();
 
         if (verbose) {
-            LOG.info(() -> "Connecting to " + url);
+            // Issue #30: never log inline URL credentials.
+            LOG.info(() -> "Connecting to " + JdbcUrlRedactor.redact(url));
         }
 
         try (Connection connection = JdbcConnectionFactory.connect(url, user, resolvedPassword)) {
@@ -176,7 +187,6 @@ public class JdbcExportCommand implements Callable<Integer> {
             ExportOptions options = new ExportOptions(
                 url,
                 user,
-                resolvedPassword,
                 sql,
                 sqlFile,
                 outputFormat,
@@ -191,6 +201,8 @@ public class JdbcExportCommand implements Callable<Integer> {
                 pretty,
                 includeHeader,
                 nullValue,
+                csvEscapeFormulas,
+                csvBom,
                 parquetCompression
             );
 
@@ -242,8 +254,9 @@ public class JdbcExportCommand implements Callable<Integer> {
     private void publishTransformMetrics(TransformPipeline pipeline, OutputFormat outputFormat, long durationMillis) {
         TransformMetrics.Snapshot snapshot = pipeline.metrics().snapshot();
         TransformMetricsSettings settings = TransformMetricsSettings.fromConfig();
+        // Only reached after a successful export: a failure propagates to call() before publishing.
         TransformMetricsPublisher.publish(Metrics.globalRegistry, "cli", "cli",
-            outputFormat.name().toLowerCase(), snapshot, java.time.Duration.ofMillis(durationMillis), settings);
+            outputFormat.name().toLowerCase(), "success", snapshot, java.time.Duration.ofMillis(durationMillis), settings);
         if (settings.enabled()) {
             for (TransformMetrics.StepMetrics step : snapshot.steps()) {
                 if (settings.isSlow(step.totalMillis())) {

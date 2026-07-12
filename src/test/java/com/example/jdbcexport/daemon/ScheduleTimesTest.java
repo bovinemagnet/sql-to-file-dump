@@ -33,6 +33,24 @@ class ScheduleTimesTest {
     }
 
     @Test
+    void intervalNextFireAnchorsToTheGridNotTheActualLastRun() {
+        // Created 2026-01-01T00:00Z, every 15 minutes: due times are on the :00/:15/:30/:45 grid.
+        // A run fired 25 seconds late must not push the next fire 25 seconds later (issue #33b).
+        Instant lateLastRun = Instant.parse("2026-01-01T00:15:25Z");
+        Optional<Instant> next = ScheduleTimes.nextFire(schedule("interval", null, 15, "minute", null, lateLastRun), lateLastRun);
+        assertThat(next).contains(Instant.parse("2026-01-01T00:30:00Z"));
+    }
+
+    @Test
+    void intervalSkipsForwardAfterMissedRunsInsteadOfBursting() {
+        // Several intervals were missed (daemon down): the next fire is the next grid
+        // point after the last run, so at most one catch-up run happens.
+        Instant staleLastRun = Instant.parse("2026-01-01T01:07:00Z");
+        Optional<Instant> next = ScheduleTimes.nextFire(schedule("interval", null, 15, "minute", null, staleLastRun), staleLastRun);
+        assertThat(next).contains(Instant.parse("2026-01-01T01:15:00Z"));
+    }
+
+    @Test
     void onceFiresOnlyUntilItHasRun() {
         Schedule pending = schedule("once", null, null, null, "2026-06-15 06:00", null);
         assertThat(ScheduleTimes.nextFire(pending, Instant.EPOCH)).isPresent();

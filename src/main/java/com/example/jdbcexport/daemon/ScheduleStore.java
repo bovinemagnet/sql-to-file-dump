@@ -179,6 +179,8 @@ public class ScheduleStore {
         require(s.name(), "Schedule name is required.");
         require(s.connectionId(), "A saved connection is required.");
         require(s.sql(), "SQL is required.");
+        // Reject non-read-only SQL when the schedule is saved, not on every tick (issue #33d).
+        com.example.jdbcexport.jdbc.SqlSafetyValidator.validate(s.sql());
         require(s.outputPattern(), "Output path pattern is required.");
         if (!SUPPORTED_FORMATS.contains(s.format())) {
             throw new ExportException(ExitCodes.INVALID_ARGUMENTS,

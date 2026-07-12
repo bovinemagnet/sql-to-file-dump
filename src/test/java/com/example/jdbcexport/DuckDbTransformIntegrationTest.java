@@ -150,8 +150,8 @@ class DuckDbTransformIntegrationTest {
     }
 
     private static ExportOptions options(Path output, OutputFormat format) {
-        return new ExportOptions("jdbc:duckdb:", "test", null, "sql", null, format, output.toString(),
-            1000, null, null, false, false, false, false, false, true, "", "SNAPPY");
+        return new ExportOptions("jdbc:duckdb:", "test", "sql", null, format, output.toString(),
+            1000, null, null, false, false, false, false, false, true, "", false, false, "SNAPPY");
     }
 
     private void setupTable(Connection connection) throws Exception {

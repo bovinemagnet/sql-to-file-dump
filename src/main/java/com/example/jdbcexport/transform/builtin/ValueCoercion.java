@@ -15,7 +15,7 @@ final class ValueCoercion {
     static Object parse(String literal, ValueKind kind, String transformType, String column) {
         try {
             return switch (kind) {
-                case BOOLEAN -> Boolean.parseBoolean(literal);
+                case BOOLEAN -> parseBoolean(literal, kind, transformType, column);
                 case INT -> Integer.parseInt(literal.trim());
                 case LONG -> Long.parseLong(literal.trim());
                 case FLOAT -> Float.parseFloat(literal.trim());
@@ -24,9 +24,30 @@ final class ValueCoercion {
                 case STRING -> literal;
             };
         } catch (NumberFormatException e) {
-            throw new ExportException(ExitCodes.TRANSFORM_ERROR,
-                "Transform \"" + transformType + "\" value \"" + literal + "\" is not valid for column \""
-                    + column + "\" (" + kind + ").");
+            throw invalid(literal, kind, transformType, column);
         }
+    }
+
+    /**
+     * {@link Boolean#parseBoolean} coerces anything that is not "true" to {@code false}, so a typo
+     * like {@code yes} or {@code 1} would silently substitute the wrong value for every NULL.
+     * Accept exactly true/false (any case, trimmed) and fail fast on everything else, matching the
+     * numeric kinds.
+     */
+    private static Boolean parseBoolean(String literal, ValueKind kind, String transformType, String column) {
+        String trimmed = literal.trim();
+        if ("true".equalsIgnoreCase(trimmed)) {
+            return Boolean.TRUE;
+        }
+        if ("false".equalsIgnoreCase(trimmed)) {
+            return Boolean.FALSE;
+        }
+        throw invalid(literal, kind, transformType, column);
+    }
+
+    private static ExportException invalid(String literal, ValueKind kind, String transformType, String column) {
+        return new ExportException(ExitCodes.TRANSFORM_ERROR,
+            "Transform \"" + transformType + "\" value \"" + literal + "\" is not valid for column \""
+                + column + "\" (" + kind + ").");
     }
 }

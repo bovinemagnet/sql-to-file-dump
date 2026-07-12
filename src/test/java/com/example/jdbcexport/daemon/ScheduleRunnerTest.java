@@ -118,4 +118,65 @@ class ScheduleRunnerTest {
 
         assertThat(jobService.submitted).hasSize(1);
     }
+
+    @Test
+    void tickFiresASimpleDueSchedule() {
+        Schedule s = intervalSchedule(1);
+        Instant due = s.createdAt().plus(2, ChronoUnit.MINUTES);
+
+        runner.tick(due);
+
+        assertThat(jobService.submitted).hasSize(1);
+        Schedule refreshed = scheduleStore.get(s.id()).orElseThrow();
+        assertThat(refreshed.lastStatus()).isEqualTo("running");
+        assertThat(refreshed.lastJobId()).isEqualTo("1");
+    }
+
+    @Test
+    void tickDoesNotFireBeforeTheScheduleIsDue() {
+        intervalSchedule(60);
+
+        // Only 5 minutes have passed against a 60-minute interval: nothing is due yet.
+        runner.tick(Instant.now().plus(5, ChronoUnit.MINUTES));
+
+        assertThat(jobService.submitted).isEmpty();
+    }
+
+    @Test
+    void tickMarksAScheduleWithAMissingConnectionAsFailedWithoutSubmittingAJob() {
+        // The schedule references a connection id that ConnectionStore has never heard of
+        // (e.g. it was deleted after the schedule was created).
+        Schedule dangling = scheduleStore.create(new Schedule(null, "orphan", true, "no-such-connection",
+            "select 1 as a", "csv", null, "out_{ts}.csv", true, "interval", null, 1, "minute", null,
+            null, null, null, null));
+        Instant due = dangling.createdAt().plus(2, ChronoUnit.MINUTES);
+
+        runner.tick(due);
+
+        assertThat(jobService.submitted).isEmpty();
+        Schedule refreshed = scheduleStore.get(dangling.id()).orElseThrow();
+        assertThat(refreshed.lastStatus()).isEqualTo("failed");
+        assertThat(refreshed.lastJobId()).isNull();
+    }
+
+    @Test
+    void onceScheduleFiresOnTheFirstDueTickAndNeverAgain() {
+        Schedule once = scheduleStore.create(new Schedule(null, "one-shot", true, connection.id(),
+            "select 1 as a", "csv", null, "out_{ts}.csv", true, "once", null, null, null,
+            "2026-01-01 00:00", null, null, null, null));
+        // ScheduleTimes parses "at" in the JVM's default zone; a full day's margin past midnight
+        // keeps this deterministic across any CI runner's time zone (UTC-12 through UTC+14).
+        Instant firstDue = Instant.parse("2026-01-02T00:00:00Z");
+
+        runner.tick(firstDue);
+        assertThat(jobService.submitted).hasSize(1);
+        Schedule afterFirstRun = scheduleStore.get(once.id()).orElseThrow();
+        assertThat(afterFirstRun.lastRunAt()).isNotNull();
+
+        // The job finishes and time moves on well past the "once" moment: it must not fire again.
+        jobService.finish("1");
+        runner.tick(firstDue.plus(1, ChronoUnit.DAYS));
+
+        assertThat(jobService.submitted).hasSize(1);
+    }
 }

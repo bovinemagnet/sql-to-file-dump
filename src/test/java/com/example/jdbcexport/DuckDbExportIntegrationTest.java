@@ -178,6 +178,126 @@ class DuckDbExportIntegrationTest {
         }
     }
 
+    @Test
+    void exportsDateToParquetHostIndependently(@TempDir Path tempDir) throws Exception {
+        // Issue #40 item 4: a DATE must round-trip to the same calendar day regardless of the
+        // JVM's default zone (a host-dependent conversion would shift it by a day near midnight).
+        TimeZone original = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("Australia/Brisbane"));
+        try {
+            Path output = tempDir.resolve("date.parquet");
+            exportToFormat(output, OutputFormat.PARQUET, "SELECT DATE '2024-06-01' AS d");
+
+            try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+                 var statement = verifyConnection.createStatement();
+                 var resultSet = statement.executeQuery(
+                     "SELECT d::VARCHAR FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+                resultSet.next();
+                assertThat(resultSet.getString(1)).isEqualTo("2024-06-01");
+            }
+        } finally {
+            TimeZone.setDefault(original);
+        }
+    }
+
+    @Test
+    void exportsBinaryToParquet(@TempDir Path tempDir) throws Exception {
+        // Issue #40 item 4: BLOB/BINARY columns must round-trip byte-for-byte, not as Base64
+        // text (the fast path's Parquet mapping keeps raw bytes; only transform mode is textual).
+        Path output = tempDir.resolve("binary.parquet");
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT 'hello'::BLOB AS data");
+
+        try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = verifyConnection.createStatement();
+             var resultSet = statement.executeQuery(
+                 "SELECT data FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+            resultSet.next();
+            assertThat(resultSet.getBytes(1)).isEqualTo("hello".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    // --- Issue #40 item 5: --overwrite per format (a real second export replaces the file's
+    // --- content, not just the pre-flight existence check already covered by JdbcExportCommandValidationTest) --
+
+    @Test
+    void overwritesExistingCsvFile(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("out.csv");
+        exportToFormat(output, OutputFormat.CSV, "SELECT booking_id FROM bookings ORDER BY booking_id");
+        exportToFormat(output, OutputFormat.CSV, "SELECT booking_id FROM bookings WHERE booking_id = 'B001'");
+
+        assertThat(Files.readAllLines(output)).containsExactly("booking_id", "B001");
+    }
+
+    @Test
+    void overwritesExistingTsvFile(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("out.tsv");
+        exportToFormat(output, OutputFormat.TSV, "SELECT booking_id FROM bookings ORDER BY booking_id");
+        exportToFormat(output, OutputFormat.TSV, "SELECT booking_id FROM bookings WHERE booking_id = 'B001'");
+
+        assertThat(Files.readAllLines(output)).containsExactly("booking_id", "B001");
+    }
+
+    @Test
+    void overwritesExistingJsonFile(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("out.json");
+        exportToFormat(output, OutputFormat.JSON, "SELECT booking_id FROM bookings ORDER BY booking_id");
+        exportToFormat(output, OutputFormat.JSON, "SELECT booking_id FROM bookings WHERE booking_id = 'B001'");
+
+        assertThat(Files.readString(output).trim()).isEqualTo("[{\"booking_id\":\"B001\"}]");
+    }
+
+    @Test
+    void overwritesExistingNdjsonFile(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("out.ndjson");
+        exportToFormat(output, OutputFormat.NDJSON, "SELECT booking_id FROM bookings ORDER BY booking_id");
+        exportToFormat(output, OutputFormat.NDJSON, "SELECT booking_id FROM bookings WHERE booking_id = 'B001'");
+
+        assertThat(Files.readAllLines(output)).containsExactly("{\"booking_id\":\"B001\"}");
+    }
+
+    // --- Issue #40 item 9: empty-result-set output (JSON's empty-array case is already covered
+    // --- by JsonWritersTest; this fills in CSV, TSV, NDJSON and Parquet) ---------------------
+
+    @Test
+    void csvWritesJustTheHeaderForAnEmptyResultSet(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("empty.csv");
+        exportToFormat(output, OutputFormat.CSV, "SELECT booking_id FROM bookings WHERE 1 = 0");
+
+        assertThat(Files.readAllLines(output)).containsExactly("booking_id");
+    }
+
+    @Test
+    void tsvWritesJustTheHeaderForAnEmptyResultSet(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("empty.tsv");
+        exportToFormat(output, OutputFormat.TSV, "SELECT booking_id FROM bookings WHERE 1 = 0");
+
+        assertThat(Files.readAllLines(output)).containsExactly("booking_id");
+    }
+
+    @Test
+    void ndjsonWritesAnEmptyFileForAnEmptyResultSet(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("empty.ndjson");
+        exportToFormat(output, OutputFormat.NDJSON, "SELECT booking_id FROM bookings WHERE 1 = 0");
+
+        assertThat(output).exists();
+        assertThat(Files.readAllLines(output)).isEmpty();
+    }
+
+    @Test
+    void parquetWritesAValidZeroRowFileForAnEmptyResultSet(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("empty.parquet");
+        exportToFormat(output, OutputFormat.PARQUET, "SELECT booking_id FROM bookings WHERE 1 = 0");
+
+        assertThat(output).exists();
+        try (Connection verifyConnection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = verifyConnection.createStatement();
+             var resultSet = statement.executeQuery(
+                 "SELECT COUNT(*) FROM read_parquet('" + output.toAbsolutePath() + "')")) {
+            resultSet.next();
+            assertThat(resultSet.getLong(1)).isEqualTo(0L);
+        }
+    }
+
     private void exportToFormat(Path output, OutputFormat format, String sql) throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
             setupTable(connection);

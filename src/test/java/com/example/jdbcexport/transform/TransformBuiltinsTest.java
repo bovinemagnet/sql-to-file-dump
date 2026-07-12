@@ -94,6 +94,47 @@ class TransformBuiltinsTest {
     }
 
     @Test
+    void defaultOnBooleanRejectsNonBooleanLiterals() {
+        // Boolean.parseBoolean would silently coerce "yes"/"1"/anything to false, substituting the
+        // wrong value for every NULL. Only true/false (any case, trimmed) are accepted.
+        OutboundTransformer t = DefaultTransform.PROVIDER.create(new TransformSpec("default",
+            Map.of("column", "flag", "value", "yes")));
+        assertThatThrownBy(() -> t.transformSchema(List.of(col(1, "flag", Types.BOOLEAN))))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("not valid");
+    }
+
+    @Test
+    void defaultOnBooleanAcceptsTrueAndFalseIgnoringCaseAndWhitespace() {
+        OutboundTransformer asTrue = DefaultTransform.PROVIDER.create(new TransformSpec("default",
+            Map.of("column", "flag", "value", "TRUE ")));
+        asTrue.transformSchema(List.of(col(1, "flag", Types.BOOLEAN)));
+        Row row = new Row();
+        row.put("flag", null);
+        TransformTestSupport.run(asTrue, row);
+        assertThat(row.get("flag")).isEqualTo(Boolean.TRUE);
+
+        OutboundTransformer asFalse = DefaultTransform.PROVIDER.create(new TransformSpec("default",
+            Map.of("column", "flag", "value", "false")));
+        asFalse.transformSchema(List.of(col(1, "flag", Types.BOOLEAN)));
+        Row other = new Row();
+        other.put("flag", null);
+        TransformTestSupport.run(asFalse, other);
+        assertThat(other.get("flag")).isEqualTo(Boolean.FALSE);
+    }
+
+    @Test
+    void keepRejectsDuplicateColumns() {
+        // Silent de-duplication would hide a config typo; keep:id,id must fail fast.
+        OutboundTransformer t = KeepTransform.PROVIDER.create(new TransformSpec("keep",
+            Map.of("columns", List.of("id", "id"))));
+        assertThatThrownBy(() -> t.transformSchema(List.of(col(1, "id", Types.INTEGER))))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("duplicate")
+            .hasMessageContaining("id");
+    }
+
+    @Test
     void defaultFailsWhenValueIncompatibleWithColumnType() {
         OutboundTransformer t = DefaultTransform.PROVIDER.create(new TransformSpec("default", Map.of("column", "n", "value", "abc")));
         assertThatThrownBy(() -> t.transformSchema(List.of(col(1, "n", Types.INTEGER))))

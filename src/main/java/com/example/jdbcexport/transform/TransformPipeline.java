@@ -33,6 +33,9 @@ public final class TransformPipeline {
     private final ErrorStrategy errorStrategy;
     private final TransformMetrics metrics = new TransformMetrics();
     private long rowNumber;
+    /** Per-step output column names resolved by {@link #outputSchema}; null until resolved. */
+    private List<Set<String>> stepOutputNames;
+    private boolean outputShapeVerified;
 
     /** Convenience: name each step by its transformer name, fail-fast on error. */
     public TransformPipeline(List<OutboundTransformer> transformers) {
@@ -80,14 +83,21 @@ public final class TransformPipeline {
      */
     public List<ResultSetColumn> outputSchema(List<ResultSetColumn> inputColumns) {
         List<ResultSetColumn> columns = inputColumns;
+        List<Set<String>> resolvedNames = new ArrayList<>(steps.size());
         for (Step step : steps) {
             columns = List.copyOf(step.transformer().transformSchema(columns));
             if (columns.isEmpty()) {
                 throw new ExportException(ExitCodes.TRANSFORM_ERROR,
                     "Transform \"" + step.name() + "\" removed all columns; nothing would be exported.");
             }
+            Set<String> names = new LinkedHashSet<>();
+            for (ResultSetColumn column : columns) {
+                names.add(column.outputName());
+            }
+            resolvedNames.add(names);
         }
         validateKeepOriginalIsCoherent(inputColumns, columns);
+        this.stepOutputNames = resolvedNames;
         return columns;
     }
 
@@ -158,6 +168,9 @@ public final class TransformPipeline {
 
             if (result instanceof TransformResult.Keep keep) {
                 current = keep.row();
+                if (!outputShapeVerified && stepOutputNames != null) {
+                    verifyRowShape(step, stepOutputNames.get(i), current);
+                }
             } else if (result instanceof TransformResult.Drop) {
                 metrics.recordRowDropped(false);
                 return null;
@@ -172,8 +185,46 @@ public final class TransformPipeline {
                 return handled;
             }
         }
+        outputShapeVerified = true;
         metrics.recordRowOut();
         return current;
+    }
+
+    /**
+     * Verify a transformed row's key set against the step's schema resolved by {@link #outputSchema}.
+     * Nothing else checks that {@code transform()} actually produces the declared columns — writers
+     * null-fill missing keys and drop extras, so an external transform that renames or adds a field
+     * only at runtime would otherwise export a whole column of nulls with exit 0. Checked on the
+     * first row that completes the pipeline only: the defect is deterministic per pipeline, so a
+     * per-row check would tax every export for no extra coverage. The mismatch throws regardless of
+     * {@link ErrorStrategy} — skipRow would swallow the one checked row and re-hide the defect.
+     */
+    private void verifyRowShape(Step step, Set<String> expected, Row row) {
+        if (expected.equals(row.names())) {
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        for (String name : expected) {
+            if (!row.has(name)) {
+                missing.add("\"" + name + "\"");
+            }
+        }
+        List<String> unexpected = new ArrayList<>();
+        for (String name : row.names()) {
+            if (!expected.contains(name)) {
+                unexpected.add("\"" + name + "\"");
+            }
+        }
+        StringBuilder detail = new StringBuilder();
+        if (!missing.isEmpty()) {
+            detail.append(" is missing declared columns ").append(missing);
+        }
+        if (!unexpected.isEmpty()) {
+            detail.append(detail.isEmpty() ? " has" : " and has").append(" undeclared columns ").append(unexpected);
+        }
+        throw new ExportException(ExitCodes.TRANSFORM_ERROR,
+            "Transform \"" + step.name() + "\" produced a row that does not match its declared schema: the row"
+                + detail + ".");
     }
 
     /** Returns the row to emit, {@code null} to drop, or throws to abort — per the strategy. */

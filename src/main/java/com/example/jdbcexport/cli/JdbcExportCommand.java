@@ -254,8 +254,9 @@ public class JdbcExportCommand implements Callable<Integer> {
     private void publishTransformMetrics(TransformPipeline pipeline, OutputFormat outputFormat, long durationMillis) {
         TransformMetrics.Snapshot snapshot = pipeline.metrics().snapshot();
         TransformMetricsSettings settings = TransformMetricsSettings.fromConfig();
+        // Only reached after a successful export: a failure propagates to call() before publishing.
         TransformMetricsPublisher.publish(Metrics.globalRegistry, "cli", "cli",
-            outputFormat.name().toLowerCase(), snapshot, java.time.Duration.ofMillis(durationMillis), settings);
+            outputFormat.name().toLowerCase(), "success", snapshot, java.time.Duration.ofMillis(durationMillis), settings);
         if (settings.enabled()) {
             for (TransformMetrics.StepMetrics step : snapshot.steps()) {
                 if (settings.isSlow(step.totalMillis())) {

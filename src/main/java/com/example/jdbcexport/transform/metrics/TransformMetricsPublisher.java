@@ -20,19 +20,24 @@ public final class TransformMetricsPublisher {
     private TransformMetricsPublisher() {
     }
 
+    /**
+     * @param status the export outcome — {@code "success"} or {@code "error"} — tagged onto the
+     *               pipeline timer, row counter and per-step timers so failed exports are not
+     *               reported as successes (issue #34)
+     */
     public static void publish(MeterRegistry registry, String pipeline, String source, String output,
-                               TransformMetrics.Snapshot snapshot, Duration totalDuration,
+                               String status, TransformMetrics.Snapshot snapshot, Duration totalDuration,
                                TransformMetricsSettings settings) {
         if (!settings.enabled()) {
             return;
         }
 
         Timer.builder("sql_transformer_transform_pipeline_duration_seconds")
-            .tags("pipeline", pipeline, "source", source, "output", output, "status", "success")
+            .tags("pipeline", pipeline, "source", source, "output", output, "status", status)
             .register(registry)
             .record(totalDuration);
 
-        registry.counter("sql_transformer_transform_rows_total", "pipeline", pipeline, "status", "success")
+        registry.counter("sql_transformer_transform_rows_total", "pipeline", pipeline, "status", status)
             .increment(snapshot.rowsOut());
         if (snapshot.rowsDroppedByFilter() > 0) {
             registry.counter("sql_transformer_transform_rows_dropped_total", "pipeline", pipeline, "reason", "filtered")
@@ -46,7 +51,7 @@ public final class TransformMetricsPublisher {
         for (TransformMetrics.StepMetrics step : snapshot.steps()) {
             if (settings.perTransform()) {
                 Timer.builder("sql_transformer_transform_duration_seconds")
-                    .tags("pipeline", pipeline, "transform", step.name(), "type", step.type(), "status", "success")
+                    .tags("pipeline", pipeline, "transform", step.name(), "type", step.type(), "status", status)
                     .register(registry)
                     .record(step.totalNanos(), TimeUnit.NANOSECONDS);
             }

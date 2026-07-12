@@ -23,6 +23,48 @@ class ExportJobServiceTest {
         // ServiceLoader scan under the Quarkus classloader, leaving the DuckDB driver
         // invisible to this classloader. Register it explicitly.
         DriverManager.registerDriver(new org.duckdb.DuckDBDriver());
+        DriverManager.registerDriver(new ErrorThrowingDriver());
+    }
+
+    /** Simulates a broken driver whose connect throws an {@link Error}, not an exception (issue #32). */
+    public static final class ErrorThrowingDriver implements java.sql.Driver {
+        @Override
+        public java.sql.Connection connect(String url, java.util.Properties info) {
+            if (!acceptsURL(url)) {
+                return null;
+            }
+            throw new NoClassDefFoundError("simulated missing driver class");
+        }
+
+        @Override
+        public boolean acceptsURL(String url) {
+            return url != null && url.startsWith("jdbc:boom:");
+        }
+
+        @Override
+        public java.sql.DriverPropertyInfo[] getPropertyInfo(String url, java.util.Properties info) {
+            return new java.sql.DriverPropertyInfo[0];
+        }
+
+        @Override
+        public int getMajorVersion() {
+            return 0;
+        }
+
+        @Override
+        public int getMinorVersion() {
+            return 0;
+        }
+
+        @Override
+        public boolean jdbcCompliant() {
+            return false;
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() {
+            return java.util.logging.Logger.getLogger("boom");
+        }
     }
 
     private final ExportJobService service = new ExportJobService();
@@ -68,6 +110,30 @@ class ExportJobServiceTest {
             .satisfies(step -> assertThat(step.type()).isEqualTo("mask"));
         // Masked output must not leak the original value.
         assertThat(Files.readString(output)).doesNotContain("a@b.com").contains("***");
+    }
+
+    @Test
+    void failedTransformJobPublishesErrorStatusMetrics(@TempDir Path tempDir) {
+        var registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        io.micrometer.core.instrument.Metrics.addRegistry(registry);
+        try {
+            // The rename references a missing column, so the export fails after the
+            // pipeline is built; the published metrics must not claim success (issue #34).
+            ExportJob job = service.submit(requestWithTransforms(
+                "SELECT 1 AS a", tempDir.resolve("fail.csv"), List.of("rename:missing=x")));
+            awaitFinished(job);
+
+            assertThat(job.getStatus()).isEqualTo(ExportJob.Status.FAILED);
+            // The global composite may carry success-tagged meters from other tests,
+            // so assert on the error-tagged timer: it only exists once the failed
+            // outcome is threaded through to the publisher.
+            var errorTimer = registry.find("sql_transformer_transform_pipeline_duration_seconds")
+                .tag("status", "error").timer();
+            assertThat(errorTimer).isNotNull();
+            assertThat(errorTimer.count()).isEqualTo(1);
+        } finally {
+            io.micrometer.core.instrument.Metrics.removeRegistry(registry);
+        }
     }
 
     @Test
@@ -127,6 +193,18 @@ class ExportJobServiceTest {
 
         assertThat(job.getStatus()).isEqualTo(ExportJob.Status.FAILED);
         assertThat(job.getError()).isNotBlank();
+    }
+
+    @Test
+    void marksJobFailedWhenAnErrorEscapesTheRun(@TempDir Path tempDir) {
+        ExportJob job = service.submit(new ExportJobRequest(
+            "jdbc:boom:", "ignored", null, null, "SELECT 1 AS a", OutputFormat.CSV,
+            tempDir.resolve("boom.csv").toString(), false));
+
+        awaitFinished(job);
+
+        assertThat(job.getStatus()).isEqualTo(ExportJob.Status.FAILED);
+        assertThat(job.getError()).contains("simulated missing driver class");
     }
 
     @Test

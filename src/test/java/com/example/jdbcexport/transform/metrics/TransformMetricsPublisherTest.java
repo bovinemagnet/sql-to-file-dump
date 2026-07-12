@@ -51,7 +51,7 @@ class TransformMetricsPublisherTest {
         pipeline.transform(new Row(Map.of("a", 2)));
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv",
+        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv", "success",
             pipeline.metrics().snapshot(), Duration.ofMillis(5), ALL_ON);
 
         assertThat(registry.find("sql_transformer_transform_pipeline_duration_seconds").timer().count()).isEqualTo(1);
@@ -62,12 +62,31 @@ class TransformMetricsPublisherTest {
     }
 
     @Test
+    void tagsMetersWithTheProvidedStatus() {
+        TransformPipeline pipeline = renamePipeline();
+        pipeline.transform(new Row(Map.of("a", 1)));
+
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TransformMetricsPublisher.publish(registry, "p1", "daemon", "csv", "error",
+            pipeline.metrics().snapshot(), Duration.ofMillis(5), ALL_ON);
+
+        assertThat(registry.find("sql_transformer_transform_pipeline_duration_seconds")
+            .tag("status", "error").timer()).isNotNull();
+        assertThat(registry.find("sql_transformer_transform_rows_total")
+            .tag("status", "error").counter()).isNotNull();
+        assertThat(registry.find("sql_transformer_transform_duration_seconds")
+            .tag("status", "error").timer()).isNotNull();
+        assertThat(registry.find("sql_transformer_transform_pipeline_duration_seconds")
+            .tag("status", "success").timer()).isNull();
+    }
+
+    @Test
     void perTransformFalseSkipsStepTimers() {
         TransformPipeline pipeline = renamePipeline();
         pipeline.transform(new Row(Map.of("a", 1)));
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv",
+        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv", "success",
             pipeline.metrics().snapshot(), Duration.ofMillis(5), new TransformMetricsSettings(true, false, 50));
 
         assertThat(registry.find("sql_transformer_transform_duration_seconds").timer()).isNull();
@@ -80,7 +99,7 @@ class TransformMetricsPublisherTest {
         pipeline.transform(new Row(Map.of("a", 1)));
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv",
+        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv", "success",
             pipeline.metrics().snapshot(), Duration.ofMillis(5), new TransformMetricsSettings(false, true, 50));
 
         assertThat(registry.getMeters()).isEmpty();
@@ -105,7 +124,7 @@ class TransformMetricsPublisherTest {
         pipeline.transform(new Row(Map.of("a", 1)));
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv",
+        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv", "success",
             pipeline.metrics().snapshot(), Duration.ofMillis(5), ALL_ON);
 
         assertThat(registry.find("sql_transformer_transform_rows_dropped_total").tag("reason", "filtered").counter().count())
@@ -119,7 +138,7 @@ class TransformMetricsPublisherTest {
         pipeline.transform(new Row(Map.of("a", 1)));
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv",
+        TransformMetricsPublisher.publish(registry, "p1", "cli", "csv", "success",
             pipeline.metrics().snapshot(), Duration.ofMillis(5), ALL_ON);
 
         assertThat(registry.find("sql_transformer_transform_rows_dropped_total").tag("reason", "error").counter().count())

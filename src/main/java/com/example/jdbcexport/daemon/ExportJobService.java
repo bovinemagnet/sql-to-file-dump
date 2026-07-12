@@ -189,8 +189,15 @@ public class ExportJobService {
                         job::recordProgress, columns, pipeline);
                 job.markCompleted(Instant.now(), result.rowCount());
             }
-        } catch (Exception e) {
-            job.markFailed(Instant.now(), e.getMessage());
+        } catch (Throwable t) {
+            // Catch Throwable, not Exception: an Error (OOM, StackOverflowError,
+            // NoClassDefFoundError from a missing driver) must not leave the job
+            // RUNNING forever (issue #32). Fatal errors are rethrown after the job
+            // is marked failed, preserving the executor's default handling.
+            job.markFailed(Instant.now(), t.getMessage());
+            if (t instanceof Error error) {
+                throw error;
+            }
         } finally {
             if (pipeline != null && !pipeline.isEmpty()) {
                 recordTransformMetrics(job, request, pipeline);
@@ -219,8 +226,10 @@ public class ExportJobService {
         TransformMetricsSettings settings = TransformMetricsSettings.fromConfig();
         job.recordTransformMetrics(snapshot, settings.slowTransformThresholdMs());
         String output = request.format() == null ? "unknown" : request.format().name().toLowerCase(Locale.ROOT);
+        // Metrics are published after markCompleted/markFailed, so tag the real outcome (issue #34).
+        String status = job.getStatus() == ExportJob.Status.FAILED ? "error" : "success";
         TransformMetricsPublisher.publish(Metrics.globalRegistry, "daemon", "daemon", output,
-            snapshot, Duration.ofMillis(job.getElapsedMillis()), settings);
+            status, snapshot, Duration.ofMillis(job.getElapsedMillis()), settings);
     }
 
     private static String describeServer(Connection connection) {

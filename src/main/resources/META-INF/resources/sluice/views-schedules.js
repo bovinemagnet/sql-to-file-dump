@@ -34,6 +34,22 @@ function schedAgo(ms) {
   return Math.floor(sec / 86400) + 'd ago';
 }
 
+function schedRowActions(s) {
+  const pd = STATE.pendingDelete;
+  if (pd && pd.kind === 'schedule' && pd.id === s.id && Date.now() < pd.until) {
+    return `<div class="orow__act confirmdel">
+      <span class="confirmdel__lab">delete?</span>
+      <div class="iact iact--danger" title="Confirm delete" data-sched-action="confirm-delete" data-id="${escAttr(s.id)}">${icon('check')}</div>
+      <div class="iact" title="Keep" data-sched-action="cancel-delete" data-id="${escAttr(s.id)}">${icon('close')}</div>
+    </div>`;
+  }
+  return `<div class="orow__act">
+      <div class="iact iact--accent" title="Run now" data-sched-action="run" data-id="${escAttr(s.id)}">${icon('play_arrow')}</div>
+      <div class="iact" title="Edit" data-sched-action="edit" data-id="${escAttr(s.id)}">${icon('edit')}</div>
+      <div class="iact iact--danger" title="Delete" data-sched-action="delete" data-id="${escAttr(s.id)}">${icon('delete')}</div>
+    </div>`;
+}
+
 function schedRow(s) {
   return `<div class="orow" style="${SCH_GRID}">
     <div class="orow__out">
@@ -44,11 +60,7 @@ function schedRow(s) {
     ${nextRunCell(s)}
     ${lastRunCell(s)}
     <div><span class="sw ${s.enabled ? 'sw--on' : ''}" data-sched-action="toggle" data-id="${escAttr(s.id)}" title="${s.enabled ? 'Disable' : 'Enable'}"></span></div>
-    <div class="orow__act">
-      <div class="iact iact--accent" title="Run now" data-sched-action="run" data-id="${escAttr(s.id)}">${icon('play_arrow')}</div>
-      <div class="iact" title="Edit" data-sched-action="edit" data-id="${escAttr(s.id)}">${icon('edit')}</div>
-      <div class="iact iact--danger" title="Delete" data-sched-action="delete" data-id="${escAttr(s.id)}">${icon('delete')}</div>
-    </div>
+    ${schedRowActions(s)}
   </div>`;
 }
 
@@ -56,15 +68,22 @@ function schedFormHTML() {
   const editing = STATE.editingSchedule ? STATE.schedules.find(s => s.id === STATE.editingSchedule) : null;
   const v = editing || { name: '', connectionId: '', sql: SQL_EVENTS, format: 'parquet', outputPattern: 'exports/orders_{date}.parquet', triggerType: 'cron', cron: '0 2 * * *', every: 1, unit: 'hour', at: '2026-06-15 06:00', enabled: true, overwrite: true };
   const conns = STATE.connections || [];
-  const connOpts = conns.map(c => `<option value="${escAttr(c.id)}" ${c.id === v.connectionId ? 'selected' : ''}>${esc(c.name)} — ${esc(c.url)}</option>`).join('');
+  /* the schedule's saved connection may have been deleted — never silently
+   * rebind to the first option; force an explicit choice instead */
+  const connMissing = !!(v.connectionId && !conns.some(c => c.id === v.connectionId));
+  const missingOpt = connMissing
+    ? `<option value="" selected disabled>connection missing (was ${escAttr(v.connectionId)}) — choose a connection</option>`
+    : '';
+  const connOpts = missingOpt + conns.map(c => `<option value="${escAttr(c.id)}" ${(!connMissing && c.id === v.connectionId) ? 'selected' : ''}>${esc(c.name)} — ${esc(c.url)}</option>`).join('');
   const fmtSeg = ['csv', 'tsv', 'json', 'ndjson', 'parquet']
     .map(f => `<div class="dseg__i ${f === v.format ? 'dseg__i--on' : ''}" data-seg="format" data-val="${f}">${f}</div>`).join('');
   const tt = v.triggerType || 'cron';
   const trigSeg = ['cron', 'interval', 'once'].map(t =>
     `<div class="dseg__i ${t === tt ? 'dseg__i--on' : ''}" data-seg="trigger" data-val="${t}" style="flex:1;text-align:center">${t === 'once' ? 'Once' : t.charAt(0).toUpperCase() + t.slice(1)}</div>`).join('');
 
-  const connField = conns.length
-    ? `<select class="sel" name="connectionId">${connOpts}</select>`
+  const connField = (conns.length || connMissing)
+    ? `<select class="sel" name="connectionId">${connOpts}</select>` +
+      (connMissing ? `<div class="cronhint" style="margin-top:9px;color:var(--warn)">${icon('warning')} <span>The saved connection this schedule used no longer exists — choose a replacement before saving.</span></div>` : '')
     : `<div class="cronhint" style="color:var(--warn)">${icon('warning')} <span>No saved connections yet — add one on the Connections tab first.</span></div>`;
 
   return `<div class="dcard" id="schedForm">
@@ -117,21 +136,25 @@ function schedFormHTML() {
   </div>`;
 }
 
-function schedulesInner() {
+function schedKpisHTML() {
   const list = STATE.schedules || [];
   const enabled = list.filter(s => s.enabled);
   const failed = list.filter(s => s.lastStatus === 'failed').length;
   const upcoming = enabled.filter(s => s.nextRunEpochMs != null).sort((a, b) => a.nextRunEpochMs - b.nextRunEpochMs);
   const nextLabel = upcoming.length ? fmtCountdown((upcoming[0].nextRunEpochMs - Date.now()) / 1000).replace('in ', '') : '—';
 
-  const kpis = `<div class="kstrip kstrip--4">
+  return `<div class="kstrip kstrip--4" id="schedKpis">
     ${kpiTile({ ic: 'event_available', k: 'Active schedules', v: enabled.length, unit: '/ ' + list.length })}
     ${kpiTile({ ic: 'timer', k: 'Next run', v: nextLabel, sub: upcoming.length ? upcoming[0].name : 'none scheduled' })}
     ${kpiTile({ ic: 'event_repeat', k: 'Total schedules', v: list.length })}
     ${kpiTile({ ic: 'error', k: 'Last-run failures', v: failed, sub: failed ? 'check the table' : 'none' })}
   </div>`;
+}
 
-  const timeline = `<div class="dcard">
+function schedTimelineHTML() {
+  const list = STATE.schedules || [];
+  const upcoming = list.filter(s => s.enabled && s.nextRunEpochMs != null).sort((a, b) => a.nextRunEpochMs - b.nextRunEpochMs);
+  return `<div class="dcard" id="schedTimeline">
     <div class="dcard__h"><div class="dcard__t">Upcoming runs${icon('', '')}<div class="sub">${upcoming.length} scheduled</div></div></div>
     <div class="tl">
       ${upcoming.length ? upcoming.slice(0, 6).map(s => `<div class="tl__i">
@@ -141,8 +164,11 @@ function schedulesInner() {
       </div>`).join('') : `<div class="meta" style="padding:6px 2px">No enabled schedules with an upcoming run.</div>`}
     </div>
   </div>`;
+}
 
-  const table = `<div>
+function schedTableHTML() {
+  const list = STATE.schedules || [];
+  return `<div id="schedTable">
     <p class="sectlabel">All schedules <span class="ct">· ${list.length}</span></p>
     <div class="otable">
       <div class="otable__head" style="${SCH_GRID}">
@@ -151,8 +177,27 @@ function schedulesInner() {
       ${list.length ? list.map(schedRow).join('') : `<div class="orow" style="grid-template-columns:1fr"><div style="color:var(--faint);text-align:center;padding:18px 0">No schedules yet — create one below.</div></div>`}
     </div>
   </div>`;
+}
 
-  return kpis + `<div class="grid-2" style="margin-bottom:30px">${schedFormHTML()}${timeline}</div>` + table;
+function schedulesInner() {
+  return schedKpisHTML() +
+    `<div class="grid-2" style="margin-bottom:30px">${schedFormHTML()}${schedTimelineHTML()}</div>` +
+    schedTableHTML();
+}
+
+/* poll-driven partial refresh — countdowns, pills and 'ago' labels stay live
+ * without touching the form (which the operator may be editing) */
+function updateSchedulesLive() {
+  const k = document.getElementById('schedKpis'); if (k) k.outerHTML = schedKpisHTML();
+  const tl = document.getElementById('schedTimeline'); if (tl) tl.outerHTML = schedTimelineHTML();
+  const tb = document.getElementById('schedTable'); if (tb) tb.outerHTML = schedTableHTML();
+}
+
+async function pollSchedules() {
+  try {
+    STATE.schedules = await API.schedules();
+  } catch (e) { /* keep last known data; the header badge signals offline */ }
+  if (CURRENT === 'schedules') updateSchedulesLive();
 }
 
 function schedulesView() {
@@ -213,6 +258,11 @@ function schedFormMsg(ok, msg) {
 
 async function saveSchedule() {
   const v = schedFormValues();
+  const connSel = document.querySelector('#schedForm [name=connectionId]');
+  if (connSel && !v.connectionId) {
+    schedFormMsg(false, 'Choose a connection — the one this schedule was linked to no longer exists.');
+    return;
+  }
   setBusy('schedSave', true);
   try {
     const res = STATE.editingSchedule
@@ -241,8 +291,31 @@ async function handleSchedAction(action, id) {
     return;
   }
   if (action === 'delete') {
-    const res = await API.deleteSchedule(id);
-    if (res.ok) { if (STATE.editingSchedule === id) STATE.editingSchedule = null; await loadSchedules(); }
+    /* two-step inline confirm — never delete on a single (possibly stray) click */
+    STATE.pendingDelete = { kind: 'schedule', id, until: Date.now() + 6000 };
+    updateSchedulesLive();
+    return;
+  }
+  if (action === 'cancel-delete') {
+    STATE.pendingDelete = null;
+    updateSchedulesLive();
+    return;
+  }
+  if (action === 'confirm-delete') {
+    STATE.pendingDelete = null;
+    try {
+      const res = await API.deleteSchedule(id);
+      if (res.ok) {
+        if (STATE.editingSchedule === id) STATE.editingSchedule = null;
+        await loadSchedules();
+      } else {
+        toast('Delete failed · ' + (res.data && res.data.error ? res.data.error : 'HTTP ' + res.status), false);
+        updateSchedulesLive();
+      }
+    } catch (e) {
+      toast('Delete failed · ' + e, false);
+      updateSchedulesLive();
+    }
     return;
   }
   if (action === 'toggle') {

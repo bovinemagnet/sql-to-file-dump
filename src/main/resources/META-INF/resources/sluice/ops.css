@@ -43,6 +43,9 @@ body { margin: 0; background: #07080a; }
 }
 .daemon i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: block;
   box-shadow: 0 0 0 0 var(--accent); animation: pulse 2.4s var(--ease, ease) infinite; }
+/* offline state — driven by the /api poller in app.js */
+.daemon--off { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.daemon--off i { background: var(--danger); animation: none; box-shadow: none; }
 
 /* theme toggle */
 .othemes { display: inline-flex; gap: 3px; background: var(--s1); padding: 4px; border-radius: 999px; }
@@ -326,6 +329,28 @@ body { margin: 0; background: #07080a; }
 }
 .st--failed .dt { animation: none; }
 @keyframes stripe { from { background-position: 0 0; } to { background-position: 28px 0; } }
+
+/* inline two-step delete confirm (replaces the row/card action cluster) */
+.confirmdel { align-items: center; }
+.confirmdel__lab {
+  font: 700 10.5px/1 "JetBrains Mono", monospace; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--danger); margin-right: 2px;
+}
+
+/* transient toasts — action failures surfaced bottom-right */
+.toasthost {
+  position: fixed; right: 22px; bottom: 22px; z-index: 60;
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+}
+.toast {
+  font: 600 12.5px/1.45 "Manrope", system-ui, sans-serif; color: var(--text);
+  background: var(--s2); border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent); border-radius: 10px;
+  padding: 11px 16px; max-width: 380px; box-shadow: var(--shadow-fab);
+  transition: opacity .35s, transform .35s;
+}
+.toast--err { border-left-color: var(--danger); }
+.toast--out { opacity: 0; transform: translateY(6px); }
 
 @media (prefers-reduced-motion: reduce) {
   .daemon i, .st--run .dt, .bar__fill--stripe { animation: none; }

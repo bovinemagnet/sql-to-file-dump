@@ -272,6 +272,81 @@ class TransformPipelineTest {
         assertThat(values).containsExactly("first", "second");
     }
 
+    /** A transform whose declared schema renames a->b but whose runtime rows keep "a". */
+    private static OutboundTransformer lyingRename() {
+        return new OutboundTransformer() {
+            @Override
+            public String name() {
+                return "lying-rename";
+            }
+
+            @Override
+            public List<ResultSetColumn> transformSchema(List<ResultSetColumn> columns) {
+                List<ResultSetColumn> renamed = new ArrayList<>();
+                for (ResultSetColumn column : columns) {
+                    renamed.add("a".equals(column.outputName())
+                        ? new ResultSetColumn(column.index(), column.label(), "b", column.jdbcType(),
+                            column.jdbcTypeName(), column.precision(), column.scale(), column.nullable())
+                        : column);
+                }
+                return renamed;
+            }
+
+            @Override
+            public TransformResult transform(TransformInput input, TransformContext context) {
+                return TransformResult.keep(input.row()); // never actually renames
+            }
+        };
+    }
+
+    @Test
+    void firstRowMismatchingDeclaredSchemaFailsNamingTheStep() {
+        // An external transform that renames/adds a field at runtime but not in transformSchema
+        // would otherwise yield a whole column of nulls with exit 0 (writers null-fill missing
+        // keys and drop extras). The first row is verified against each step's resolved schema.
+        TransformPipeline pipeline = new TransformPipeline(
+            List.of(new TransformPipeline.Step("lying-rename", lyingRename())), ErrorStrategy.FAIL);
+        pipeline.outputSchema(List.of(col(1, "a")));
+
+        assertThatThrownBy(() -> pipeline.transform(new Row(Map.of("a", "v"))))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("lying-rename")
+            .hasMessageContaining("\"b\"")   // declared but missing
+            .hasMessageContaining("\"a\""); // produced but not declared
+    }
+
+    @Test
+    void shapeMismatchFailsEvenUnderSkipRow() {
+        // Only the first row is checked; letting skipRow swallow it would re-hide the defect for
+        // the rest of the export, so the mismatch aborts regardless of the error strategy.
+        TransformPipeline pipeline = new TransformPipeline(
+            List.of(new TransformPipeline.Step("lying-rename", lyingRename())), ErrorStrategy.SKIP_ROW);
+        pipeline.outputSchema(List.of(col(1, "a")));
+
+        assertThatThrownBy(() -> pipeline.transform(new Row(Map.of("a", "v"))))
+            .isInstanceOf(ExportException.class)
+            .hasMessageContaining("lying-rename");
+    }
+
+    @Test
+    void shapeIsVerifiedOnTheFirstRowOnly() {
+        // Deliberate cost trade-off: per-row checking would tax every export for a defect that is
+        // deterministic per pipeline, so a row-2 divergence is not caught.
+        TransformPipeline pipeline = new TransformPipeline(List.of(
+            transformer("late-adder", (in, ctx) -> {
+                if (ctx.rowNumber() > 1) {
+                    in.row().put("extra", "x");
+                }
+                return TransformResult.keep(in.row());
+            })));
+        pipeline.outputSchema(List.of(col(1, "a")));
+
+        assertThat(pipeline.transform(new Row(Map.of("a", "1")))).isNotNull();
+        Row second = pipeline.transform(new Row(Map.of("a", "2")));
+        assertThat(second).isNotNull();
+        assertThat(second.has("extra")).isTrue();
+    }
+
     @Test
     void outputSchemaFailsWhenAllColumnsRemoved() {
         TransformPipeline pipeline = new TransformPipeline(List.of(new OutboundTransformer() {

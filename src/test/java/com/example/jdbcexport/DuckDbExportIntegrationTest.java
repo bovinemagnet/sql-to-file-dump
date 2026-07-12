@@ -199,6 +199,8 @@ class DuckDbExportIntegrationTest {
                 false,
                 true,
                 "",
+                false,
+                false,
                 "SNAPPY"
             );
             try (RowWriter writer = new RowWriterFactory().create(options, columns)) {

@@ -178,7 +178,8 @@ public class ExportJobService {
             ExportOptions options = new ExportOptions(
                 request.url(), request.user(), request.sql(), null,
                 request.format(), request.output(), DEFAULT_FETCH_SIZE, null, null,
-                request.overwrite(), false, false, false, false, true, "", request.parquetCompression());
+                request.overwrite(), false, false, false, false, true, "", false, false,
+                request.parquetCompression());
             try (RowWriter writer = new RowWriterFactory().create(options, outputColumns, transforming)) {
                 if (writer instanceof AtomicRowWriter atomic) {
                     job.recordWritePath(atomic.temporaryPath().toString());

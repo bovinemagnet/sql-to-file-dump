@@ -61,12 +61,66 @@ class DelimitedTextEscapingTest {
         assertThat(lines).containsExactly("B001");
     }
 
+    @Test
+    void csvLeavesFormulaCharactersUntouchedByDefault(@TempDir Path tempDir) throws Exception {
+        // Issue #38: output stays byte-identical unless --csv-escape-formulas is opted into.
+        Path output = tempDir.resolve("formulas-off.csv");
+        String sql = "SELECT '=HYPERLINK(\"http://evil\")' AS formula_col";
+        export(output, OutputFormat.CSV, sql, true, "");
+
+        String content = Files.readString(output);
+        assertThat(content).contains("=HYPERLINK");
+        assertThat(content).doesNotContain("'=HYPERLINK");
+    }
+
+    @Test
+    void csvEscapesFormulaTriggerCharactersWhenOptedIn(@TempDir Path tempDir) throws Exception {
+        // Issue #38: opt-in OWASP mitigation — prefix cells starting with = + - @ tab CR
+        // with a single quote so spreadsheet applications treat them as text.
+        Path output = tempDir.resolve("formulas-on.csv");
+        String sql = "SELECT '=1+2' AS eq_col, '+alpha' AS plus_col, '-beta' AS minus_col, "
+            + "'@gamma' AS at_col, 'safe' AS safe_col";
+        export(output, OutputFormat.CSV, sql, true, "", true, false);
+
+        List<String> lines = Files.readAllLines(output);
+        assertThat(lines.get(1)).isEqualTo("'=1+2,'+alpha,'-beta,'@gamma,safe");
+    }
+
+    @Test
+    void csvWritesUtf8BomWhenOptedIn(@TempDir Path tempDir) throws Exception {
+        // Issue #38: opt-in BOM so Excel decodes non-ASCII CSV as UTF-8.
+        Path output = tempDir.resolve("bom.csv");
+        String sql = "SELECT 'café' AS name_col";
+        export(output, OutputFormat.CSV, sql, true, "", false, true);
+
+        byte[] bytes = Files.readAllBytes(output);
+        assertThat(bytes[0]).isEqualTo((byte) 0xEF);
+        assertThat(bytes[1]).isEqualTo((byte) 0xBB);
+        assertThat(bytes[2]).isEqualTo((byte) 0xBF);
+    }
+
+    @Test
+    void csvOmitsBomByDefault(@TempDir Path tempDir) throws Exception {
+        Path output = tempDir.resolve("no-bom.csv");
+        String sql = "SELECT 'café' AS name_col";
+        export(output, OutputFormat.CSV, sql, true, "");
+
+        byte[] bytes = Files.readAllBytes(output);
+        assertThat(bytes[0]).isNotEqualTo((byte) 0xEF);
+    }
+
     private void export(Path output, OutputFormat format, String sql, boolean includeHeader, String nullValue) throws Exception {
+        export(output, format, sql, includeHeader, nullValue, false, false);
+    }
+
+    private void export(Path output, OutputFormat format, String sql, boolean includeHeader, String nullValue,
+                        boolean escapeFormulas, boolean bom) throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
             List<ResultSetColumn> columns = ResultSetSchemaReader.readColumns(connection, sql, 100);
             ExportOptions options = new ExportOptions(
                 "jdbc:duckdb:", "test", sql, null, format, output.toString(),
-                100, null, null, false, false, false, false, false, includeHeader, nullValue, "SNAPPY");
+                100, null, null, false, false, false, false, false, includeHeader, nullValue,
+                escapeFormulas, bom, "SNAPPY");
             try (RowWriter writer = new RowWriterFactory().create(options, columns)) {
                 new JdbcExporter().export(connection, sql, 100, null, writer);
             }

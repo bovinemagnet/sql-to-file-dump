@@ -25,6 +25,8 @@ public record ExportOptions(
     boolean pretty,
     boolean includeHeader,
     String nullValue,
+    boolean csvEscapeFormulas,
+    boolean csvBom,
     String parquetCompression
 ) {
 
@@ -47,6 +49,8 @@ public record ExportOptions(
             + ", pretty=" + pretty
             + ", includeHeader=" + includeHeader
             + ", nullValue=" + nullValue
+            + ", csvEscapeFormulas=" + csvEscapeFormulas
+            + ", csvBom=" + csvBom
             + ", parquetCompression=" + parquetCompression
             + "]";
     }

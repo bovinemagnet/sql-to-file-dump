@@ -104,6 +104,15 @@ public class JdbcExportCommand implements Callable<Integer> {
     @Option(names = "--null-value", description = "String to use for SQL null values in CSV/TSV", defaultValue = "")
     String nullValue;
 
+    @Option(names = "--csv-escape-formulas",
+        description = "Prefix CSV/TSV cells starting with = + - @ tab or CR with a single quote "
+            + "(OWASP formula-injection mitigation for spreadsheet applications)")
+    boolean csvEscapeFormulas;
+
+    @Option(names = "--csv-bom",
+        description = "Write a UTF-8 byte-order mark at the start of CSV/TSV output (helps Excel decode non-ASCII content)")
+    boolean csvBom;
+
     @Option(names = "--parquet-compression", description = "Parquet compression: SNAPPY, GZIP, ZSTD, UNCOMPRESSED", defaultValue = "SNAPPY")
     String parquetCompression;
 
@@ -192,6 +201,8 @@ public class JdbcExportCommand implements Callable<Integer> {
                 pretty,
                 includeHeader,
                 nullValue,
+                csvEscapeFormulas,
+                csvBom,
                 parquetCompression
             );
 

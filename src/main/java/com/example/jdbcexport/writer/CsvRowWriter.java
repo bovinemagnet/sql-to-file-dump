@@ -8,8 +8,9 @@ import java.util.List;
 
 public class CsvRowWriter extends DelimitedTextRowWriter {
 
-    public CsvRowWriter(Path outputPath, List<ResultSetColumn> columns, boolean includeHeader, String nullValue) {
-        super(outputPath, columns, includeHeader, nullValue);
+    public CsvRowWriter(Path outputPath, List<ResultSetColumn> columns, boolean includeHeader, String nullValue,
+                        boolean escapeFormulas, boolean writeBom) {
+        super(outputPath, columns, includeHeader, nullValue, escapeFormulas, writeBom);
     }
 
     @Override

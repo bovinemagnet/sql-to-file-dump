@@ -25,8 +25,10 @@ public final class RowWriterFactory {
         RowWriter delegate = switch (options.format()) {
             case JSON -> new JsonArrayRowWriter(temporaryPath, options.pretty(), columns);
             case NDJSON -> new NdjsonRowWriter(temporaryPath, columns);
-            case CSV -> new CsvRowWriter(temporaryPath, columns, options.includeHeader(), options.nullValue());
-            case TSV -> new TsvRowWriter(temporaryPath, columns, options.includeHeader(), options.nullValue());
+            case CSV -> new CsvRowWriter(temporaryPath, columns, options.includeHeader(), options.nullValue(),
+                options.csvEscapeFormulas(), options.csvBom());
+            case TSV -> new TsvRowWriter(temporaryPath, columns, options.includeHeader(), options.nullValue(),
+                options.csvEscapeFormulas(), options.csvBom());
             case PARQUET -> new ParquetRowWriter(temporaryPath, columns, options.parquetCompression(), transforming);
         };
         return new AtomicRowWriter(delegate, temporaryPath, targetPath);

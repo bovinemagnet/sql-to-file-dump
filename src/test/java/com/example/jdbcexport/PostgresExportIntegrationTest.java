@@ -56,6 +56,8 @@ class PostgresExportIntegrationTest {
                     false,
                     true,
                     "",
+                    false,
+                    false,
                     "SNAPPY"
                 );
 

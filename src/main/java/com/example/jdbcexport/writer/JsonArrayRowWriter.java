@@ -6,6 +6,7 @@ import com.example.jdbcexport.jdbc.JdbcValueReader;
 import com.example.jdbcexport.jdbc.ResultSetColumn;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.StreamWriteFeature;
 import com.fasterxml.jackson.core.util.DefaultIndenter;
 import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 
@@ -35,7 +36,11 @@ public class JsonArrayRowWriter implements RowWriter {
     @Override
     public void start(ResultSetMetaData metaData) throws Exception {
         try {
-            generator = new JsonFactory().createGenerator(new BufferedOutputStream(Files.newOutputStream(outputPath)));
+            // Issue #38: plain notation (100, not 1E+2) keeps decimals consistent with CSV/TSV.
+            JsonFactory factory = JsonFactory.builder()
+                .enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN)
+                .build();
+            generator = factory.createGenerator(new BufferedOutputStream(Files.newOutputStream(outputPath)));
             if (pretty) {
                 DefaultPrettyPrinter printer = new DefaultPrettyPrinter();
                 printer.indentArraysWith(DefaultIndenter.SYSTEM_LINEFEED_INSTANCE);
@@ -97,9 +102,19 @@ public class JsonArrayRowWriter implements RowWriter {
         } else if (value instanceof Long longValue) {
             generator.writeNumber(longValue);
         } else if (value instanceof Float floatValue) {
-            generator.writeNumber(floatValue);
+            // Issue #38: NaN/Infinity have no JSON representation; Jackson's default would quote
+            // them as strings, silently changing the field's type per row. Write null instead.
+            if (floatValue.isNaN() || floatValue.isInfinite()) {
+                generator.writeNull();
+            } else {
+                generator.writeNumber(floatValue);
+            }
         } else if (value instanceof Double doubleValue) {
-            generator.writeNumber(doubleValue);
+            if (doubleValue.isNaN() || doubleValue.isInfinite()) {
+                generator.writeNull();
+            } else {
+                generator.writeNumber(doubleValue);
+            }
         } else if (value instanceof BigDecimal decimalValue) {
             generator.writeNumber(decimalValue);
         } else {

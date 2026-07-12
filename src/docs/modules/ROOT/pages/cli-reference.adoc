@@ -111,6 +111,20 @@ Applies to `csv` and `tsv` formats.
 |Replacement text for SQL `NULL` values.
 Applies to `csv` and `tsv` formats.
 
+|`--csv-escape-formulas`
+|Flag
+|`false`
+|Opt-in OWASP formula-injection mitigation for `csv` and `tsv` formats.
+Data cells whose value begins with `=`, `+`, `-`, `@`, a tab, or a carriage return are prefixed with a single quote (`'`) so spreadsheet applications treat them as text rather than executing them as formulas.
+Off by default so output stays byte-identical for existing pipelines.
+Applies to data cells only — headers and the configured `--null-value` placeholder are never modified.
+
+|`--csv-bom`
+|Flag
+|`false`
+|Write a UTF-8 byte-order mark at the start of `csv`/`tsv` output so Microsoft Excel decodes non-ASCII content correctly.
+Off by default; most other tools neither need nor want a BOM.
+
 |`--parquet-compression <codec>`
 |`SNAPPY` \| `GZIP` \| `ZSTD` \| `UNCOMPRESSED`
 |`SNAPPY`
@@ -143,6 +157,16 @@ Applies to `csv` and `tsv` formats.
 |`parquet`
 |You need compact, analytics-friendly columnar data for tools such as DuckDB, Spark, or BigQuery.
 |===
+
+== Output value conventions
+
+* **Non-finite floating-point values** — JSON has no representation for `NaN`, `Infinity`, or `-Infinity`, so in `json` and `ndjson` output these are written as JSON `null`.
+This keeps every value of a numeric field numeric (or null) instead of silently switching to a quoted string for some rows.
+CSV/TSV output writes their text form (`NaN`, `Infinity`, `-Infinity`) since delimited output is untyped text.
+* **Decimal notation** — `DECIMAL`/`NUMERIC` values are written in plain notation in `json` and `ndjson` (for example `100`, never `1E+2`), matching the plain notation CSV/TSV always used.
+* **Formula injection stance** — by default CSV/TSV cells are written verbatim, including values beginning with formula trigger characters — this tool is an ETL exporter and its output is data, not a spreadsheet.
+When exports are destined to be opened in Excel or LibreOffice, opt in with `--csv-escape-formulas` (the standard OWASP mitigation described in the options table).
+* **Encoding** — CSV/TSV files are UTF-8 without a byte-order mark by default; use `--csv-bom` when the file is destined for Excel and contains non-ASCII text.
 
 == Worked examples
 

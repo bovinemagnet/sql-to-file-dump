@@ -13,7 +13,7 @@ class ExportOptionsTest {
         ExportOptions options = new ExportOptions(
             "jdbc:postgresql://bob:hunter2@db:5432/appdb", "bob", "SELECT 1", null,
             OutputFormat.CSV, "out.csv", 100, null, null,
-            false, false, false, false, false, true, "", "SNAPPY");
+            false, false, false, false, false, true, "", false, false, "SNAPPY");
 
         assertThat(options.toString())
             .doesNotContain("hunter2")

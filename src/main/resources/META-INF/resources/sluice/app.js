@@ -24,6 +24,7 @@ const STATE = {
   series: {},        // jobId → raw instantaneous rows/s samples (normalised only at draw time)
   log: {},           // jobId → synthesised batch log lines
   lastRows: {},      // jobId → { rows, t } for instantaneous throughput
+  pendingDelete: null, // { kind: 'connection'|'schedule', id, until } — inline two-step confirm
 };
 
 /* ───────── small helpers ───────── */
@@ -210,33 +211,89 @@ function cronHuman(expr) {
     '0 0 * * *': 'At midnight, every day',
     '30 6 * * 1-5': 'At 06:30, Monday through Friday',
   };
-  if (map[expr]) return map[expr];
-  const p = expr.trim().split(/\s+/);
+  const e = String(expr == null ? '' : expr).trim();
+  if (map[e]) return map[e];
+  const p = e.split(/\s+/);
   if (p.length !== 5) return 'Enter 5 fields: min hour day-of-month month day-of-week';
-  const t = `${String(p[1]).replace('*', '00').padStart(2, '0')}:${String(p[0]).replace('*', '00').padStart(2, '0')}`;
-  return `At ${t} — ${p[2] === '*' && p[4] === '*' ? 'every day' : 'custom interval'}`;
+  const num = f => (/^\d+$/.test(f) ? parseInt(f, 10) : null);
+  const step = f => { const m = /^\*\/(\d+)$/.exec(f); return m ? parseInt(m[1], 10) : null; };
+  const allStar = fields => fields.every(f => f === '*');
+  const pad = n => String(n).padStart(2, '0');
+
+  if (allStar(p)) return 'Every minute';
+  const minStep = step(p[0]);
+  if (minStep != null && allStar(p.slice(1))) {
+    return minStep === 1 ? 'Every minute' : `Every ${minStep} minutes`;
+  }
+  const hourStep = step(p[1]);
+  if (num(p[0]) != null && hourStep != null && allStar(p.slice(2))) {
+    return hourStep === 1
+      ? `Every hour, at ${pad(num(p[0]))} past`
+      : `Every ${hourStep} hours, at ${pad(num(p[0]))} past`;
+  }
+  if (num(p[0]) != null && num(p[1]) != null && allStar(p.slice(2))) {
+    return `At ${pad(num(p[1]))}:${pad(num(p[0]))}, every day`;
+  }
+  /* not confidently describable — show the raw expression rather than guess */
+  return e;
 }
 
 /* ───────── live data poll ───────── */
+let POLL_IN_FLIGHT = false; // one poll at a time — a slow response must never overwrite newer state
+
+function setOnline(online) {
+  const b = document.getElementById('daemonBadge');
+  if (!b) return;
+  b.classList.toggle('daemon--off', !online);
+  const t = b.querySelector('span');
+  if (t) t.textContent = online ? 'Online' : 'Offline';
+}
+
 async function refreshData() {
-  let jobs, metrics;
+  if (POLL_IN_FLIGHT) return; // previous tick still outstanding — skip, next tick retries
+  POLL_IN_FLIGHT = true;
   try {
-    [jobs, metrics] = await Promise.all([API.jobs(), API.metrics()]);
-  } catch (e) {
-    return; // transient; next tick retries
+    /* independent fetches — one failing must not discard the other's data */
+    const [jobsRes, metricsRes] = await Promise.allSettled([API.jobs(), API.metrics()]);
+    setOnline(jobsRes.status === 'fulfilled' || metricsRes.status === 'fulfilled');
+    if (jobsRes.status === 'fulfilled') {
+      updateSeries(jobsRes.value);
+      STATE.jobs = jobsRes.value;
+    }
+    if (metricsRes.status === 'fulfilled') STATE.metrics = metricsRes.value;
+    updateNavFoot();
+    if (CURRENT === 'dashboard') {
+      updateDashboard();
+    } else if (CURRENT === 'live') {
+      document.getElementById('topslot').innerHTML = liverunTop();
+      document.getElementById('bodyslot').innerHTML = liverunView();
+    } else if (CURRENT === 'transforms') {
+      await loadTransformations();
+    } else if (CURRENT === 'schedules') {
+      await pollSchedules();
+    } else if (CURRENT === 'connections') {
+      await pollConnections();
+    }
+  } finally {
+    POLL_IN_FLIGHT = false;
   }
-  updateSeries(jobs);
-  STATE.jobs = jobs;
-  STATE.metrics = metrics;
-  updateNavFoot();
-  if (CURRENT === 'dashboard') {
-    updateDashboard();
-  } else if (CURRENT === 'live') {
-    document.getElementById('topslot').innerHTML = liverunTop();
-    document.getElementById('bodyslot').innerHTML = liverunView();
-  } else if (CURRENT === 'transforms') {
-    loadTransformations();
+}
+
+/* transient notice — bottom-right toast, used to surface action failures */
+function toast(msg, ok) {
+  const shell = document.querySelector('.ops-shell') || document.body;
+  let host = document.getElementById('toastHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toastHost';
+    host.className = 'toasthost';
+    shell.appendChild(host);
   }
+  const t = document.createElement('div');
+  t.className = 'toast ' + (ok ? 'toast--ok' : 'toast--err');
+  t.textContent = msg;
+  host.appendChild(t);
+  setTimeout(() => { t.classList.add('toast--out'); setTimeout(() => t.remove(), 400); }, 4500);
 }
 
 function updateSeries(jobs) {

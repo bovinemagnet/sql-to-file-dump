@@ -23,6 +23,22 @@ function connStatusPill(c) {
   return `<span class="st st--queued"><i class="dt"></i>untested</span>`;
 }
 
+function connCardActions(c) {
+  const pd = STATE.pendingDelete;
+  if (pd && pd.kind === 'connection' && pd.id === c.id && Date.now() < pd.until) {
+    return `<div class="orow__act confirmdel">
+        <span class="confirmdel__lab">delete?</span>
+        <div class="iact iact--danger" title="Confirm delete" data-conn-action="confirm-delete" data-id="${escAttr(c.id)}">${icon('check')}</div>
+        <div class="iact" title="Keep" data-conn-action="cancel-delete" data-id="${escAttr(c.id)}">${icon('close')}</div>
+      </div>`;
+  }
+  return `<div class="orow__act">
+        <div class="iact iact--accent" title="Test connection" data-conn-action="test" data-id="${escAttr(c.id)}">${icon('wifi_tethering')}</div>
+        <div class="iact" title="Edit" data-conn-action="edit" data-id="${escAttr(c.id)}">${icon('edit')}</div>
+        <div class="iact iact--danger" title="Remove" data-conn-action="delete" data-id="${escAttr(c.id)}">${icon('delete')}</div>
+      </div>`;
+}
+
 function connCard(c) {
   return `<div class="conncard" data-conn-action="edit" data-id="${escAttr(c.id)}">
     <div class="conncard__h">
@@ -36,11 +52,7 @@ function connCard(c) {
     <div class="conncard__url">${esc(c.url)}</div>
     <div class="conncard__foot">
       <span class="meta">${icon('schedule')} ${esc(fmtAgo(c.lastUsedEpochMs))}</span>
-      <div class="orow__act">
-        <div class="iact iact--accent" title="Test connection" data-conn-action="test" data-id="${escAttr(c.id)}">${icon('wifi_tethering')}</div>
-        <div class="iact" title="Edit" data-conn-action="edit" data-id="${escAttr(c.id)}">${icon('edit')}</div>
-        <div class="iact iact--danger" title="Remove" data-conn-action="delete" data-id="${escAttr(c.id)}">${icon('delete')}</div>
-      </div>
+      ${connCardActions(c)}
     </div>
   </div>`;
 }
@@ -79,28 +91,46 @@ function connFormHTML() {
   </div>`;
 }
 
-function connectionsInner() {
+function connKpisHTML() {
   const cs = STATE.connections;
   const reachable = cs.filter(c => c.status === 'reachable').length;
   const failed = cs.filter(c => c.status === 'failed').length;
   const drivers = [...new Set(cs.map(c => c.driver))];
-
-  const kpis = `<div class="kstrip kstrip--4">
+  return `<div class="kstrip kstrip--4" id="connKpis">
     ${kpiTile({ ic: 'database', k: 'Connections', v: cs.length })}
     ${kpiTile({ ic: 'check_circle', k: 'Reachable', v: reachable, unit: '/ ' + cs.length })}
     ${kpiTile({ ic: 'lan', k: 'Drivers', v: drivers.length, sub: drivers.map(driverLabel).join(' · ') || '—' })}
     ${kpiTile({ ic: 'warning', k: 'Unreachable', v: failed, sub: failed ? 'last test failed' : 'none' })}
   </div>`;
+}
 
-  const cards = `<div>
+function connCardsHTML() {
+  const cs = STATE.connections;
+  return `<div id="connCards">
     <p class="sectlabel">Saved connections <span class="ct">· ${cs.length}</span></p>
     <div class="conngrid">
       ${cs.map(connCard).join('')}
       <div class="addcard" id="connAddCard"><div class="addcard__in">${icon('add')}<b>Add connection</b><span class="meta">jdbc url + credentials</span></div></div>
     </div>
   </div>`;
+}
 
-  return kpis + cards + connFormHTML();
+function connectionsInner() {
+  return connKpisHTML() + connCardsHTML() + connFormHTML();
+}
+
+/* poll-driven partial refresh — status pills and 'used Xm ago' stay live
+ * without touching the form (which the operator may be editing) */
+function updateConnectionsLive() {
+  const k = document.getElementById('connKpis'); if (k) k.outerHTML = connKpisHTML();
+  const c = document.getElementById('connCards'); if (c) c.outerHTML = connCardsHTML();
+}
+
+async function pollConnections() {
+  try {
+    STATE.connections = await API.connections();
+  } catch (e) { /* keep last known data; the header badge signals offline */ }
+  if (CURRENT === 'connections') updateConnectionsLive();
 }
 
 function connectionsView() {
@@ -190,8 +220,31 @@ async function handleConnAction(action, id) {
     return;
   }
   if (action === 'delete') {
-    const res = await API.deleteConnection(id);
-    if (res.ok) { if (STATE.editingConn === id) STATE.editingConn = null; await loadConnections(); }
+    /* two-step inline confirm — never delete on a single (possibly stray) click */
+    STATE.pendingDelete = { kind: 'connection', id, until: Date.now() + 6000 };
+    updateConnectionsLive();
+    return;
+  }
+  if (action === 'cancel-delete') {
+    STATE.pendingDelete = null;
+    updateConnectionsLive();
+    return;
+  }
+  if (action === 'confirm-delete') {
+    STATE.pendingDelete = null;
+    try {
+      const res = await API.deleteConnection(id);
+      if (res.ok) {
+        if (STATE.editingConn === id) STATE.editingConn = null;
+        await loadConnections();
+      } else {
+        toast('Delete failed · ' + (res.data && res.data.error ? res.data.error : 'HTTP ' + res.status), false);
+        updateConnectionsLive();
+      }
+    } catch (e) {
+      toast('Delete failed · ' + e, false);
+      updateConnectionsLive();
+    }
     return;
   }
   if (action === 'test') {

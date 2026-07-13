@@ -26,6 +26,25 @@ class ConnectionApiResourceTest {
     }
 
     @Test
+    void updateWithoutCsrfHeaderIsRejected() {
+        // Issue #40: only POST was covered end-to-end; PUT must be rejected the same way.
+        given()
+            .formParam("name", "blocked")
+            .formParam("url", "jdbc:duckdb:")
+            .formParam("user", "u")
+            .when().put("/api/connections/does-not-matter")
+            .then().statusCode(403);
+    }
+
+    @Test
+    void deleteWithoutCsrfHeaderIsRejected() {
+        // Issue #40: only POST was covered end-to-end; DELETE must be rejected the same way.
+        given()
+            .when().delete("/api/connections/does-not-matter")
+            .then().statusCode(403);
+    }
+
+    @Test
     void createListTestAndDelete() {
         // No passwordEnv: DuckDB needs no credentials, so the test-connect can succeed.
         // (Storage of a passwordEnv reference is covered by ConnectionStoreTest.)
